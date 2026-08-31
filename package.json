@@ -1,0 +1,28 @@
+{
+  "name": "uber-taxi-platform",
+  "version": "1.0.0",
+  "description": "Production-grade real-world Uber ride-hailing platform with live GPS dispatch, driver navigation, rider booking, and admin god-view.",
+  "private": true,
+  "scripts": {
+    "dev:server": "cd server && npm run dev",
+    "dev:client": "cd client && npm run dev",
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "build:client": "cd client && npm run build",
+    "build": "npm run build:client",
+    "start": "cd server && npm start"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "keywords": [
+    "uber-clone",
+    "taxi",
+    "ride-hailing",
+    "socket.io",
+    "leaflet",
+    "react",
+    "express"
+  ],
+  "author": "",
+  "license": "ISC"
+}

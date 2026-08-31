@@ -1,0 +1,187 @@
+{
+  "users": [
+    {
+      "id": "rider-01",
+      "name": "Alex Johnson",
+      "email": "alex@example.com",
+      "phone": "+1 (555) 234-5678",
+      "role": "RIDER",
+      "rating": 4.92,
+      "totalRides": 48,
+      "walletBalance": 125.5,
+      "avatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80"
+    },
+    {
+      "id": "driver-01",
+      "name": "Michael Rodriguez",
+      "email": "michael.driver@example.com",
+      "phone": "+1 (555) 987-6543",
+      "role": "DRIVER",
+      "rating": 4.96,
+      "totalTrips": 1420,
+      "acceptanceRate": 98,
+      "status": "ONLINE",
+      "earningsToday": 184.2,
+      "walletBalance": 840,
+      "avatar": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80",
+      "location": {
+        "lat": 40.74911217163102,
+        "lng": -73.98554879342268,
+        "heading": 155.74081648008462
+      },
+      "vehicle": {
+        "id": "veh-01",
+        "make": "Tesla",
+        "model": "Model 3",
+        "year": 2023,
+        "color": "Midnight Silver",
+        "licensePlate": "NYC-7892",
+        "category": "UberBlack"
+      }
+    },
+    {
+      "id": "driver-02",
+      "name": "Sarah Chen",
+      "email": "sarah.driver@example.com",
+      "phone": "+1 (555) 876-5432",
+      "role": "DRIVER",
+      "rating": 4.89,
+      "totalTrips": 890,
+      "acceptanceRate": 95,
+      "status": "ONLINE",
+      "earningsToday": 142.5,
+      "walletBalance": 512,
+      "avatar": "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80",
+      "location": {
+        "lat": 40.75920725154642,
+        "lng": -73.98492841238254,
+        "heading": 336.38753421889527
+      },
+      "vehicle": {
+        "id": "veh-02",
+        "make": "Toyota",
+        "model": "Camry Hybrid",
+        "year": 2022,
+        "color": "Pearl White",
+        "licensePlate": "NYC-4419",
+        "category": "UberX"
+      }
+    },
+    {
+      "id": "driver-03",
+      "name": "David Kim",
+      "email": "david.driver@example.com",
+      "phone": "+1 (555) 765-4321",
+      "role": "DRIVER",
+      "rating": 4.94,
+      "totalTrips": 2150,
+      "acceptanceRate": 99,
+      "status": "ONLINE",
+      "earningsToday": 230,
+      "walletBalance": 1120,
+      "avatar": "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80",
+      "location": {
+        "lat": 40.74170249397925,
+        "lng": -73.98885668628687,
+        "heading": 329.45535526936226
+      },
+      "vehicle": {
+        "id": "veh-03",
+        "make": "Chevrolet",
+        "model": "Suburban XL",
+        "year": 2023,
+        "color": "Black Obsidian",
+        "licensePlate": "NYC-9011",
+        "category": "UberXL"
+      }
+    },
+    {
+      "id": "driver-04",
+      "name": "Amina Yusuf",
+      "email": "amina.driver@example.com",
+      "phone": "+1 (555) 654-3210",
+      "role": "DRIVER",
+      "rating": 4.91,
+      "totalTrips": 640,
+      "acceptanceRate": 96,
+      "status": "ONLINE",
+      "earningsToday": 95,
+      "walletBalance": 320,
+      "avatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
+      "location": {
+        "lat": 40.75251763458671,
+        "lng": -73.97746938497552,
+        "heading": 230.4184335605994
+      },
+      "vehicle": {
+        "id": "veh-04",
+        "make": "Honda",
+        "model": "Accord Touring",
+        "year": 2023,
+        "color": "Crystal Black",
+        "licensePlate": "NYC-3321",
+        "category": "UberComfort"
+      }
+    },
+    {
+      "id": "admin-01",
+      "name": "Dispatch Central",
+      "email": "admin@nexride.com",
+      "role": "ADMIN",
+      "avatar": "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150&auto=format&fit=crop&q=80"
+    }
+  ],
+  "rides": [
+    {
+      "id": "ride-sample-1",
+      "riderId": "rider-01",
+      "driverId": "driver-01",
+      "pickup": {
+        "address": "Empire State Building, 20 W 34th St, New York",
+        "lat": 40.748817,
+        "lng": -73.985428
+      },
+      "destination": {
+        "address": "Times Square, Manhattan, New York",
+        "lat": 40.758896,
+        "lng": -73.98513
+      },
+      "category": "UberBlack",
+      "status": "COMPLETED",
+      "fare": 28.5,
+      "distanceKm": 1.8,
+      "durationMin": 9,
+      "otp": "4821",
+      "paymentMethod": "WALLET",
+      "rating": 5,
+      "tip": 5,
+      "createdAt": "2026-08-31T10:15:37.700Z",
+      "completedAt": "2026-08-31T10:27:37.710Z"
+    }
+  ],
+  "transactions": [
+    {
+      "id": "tx-01",
+      "userId": "rider-01",
+      "amount": -33.5,
+      "type": "RIDE_PAYMENT",
+      "description": "Ride to Times Square (Fare + Tip)",
+      "timestamp": "2026-08-31T10:27:37.710Z"
+    },
+    {
+      "id": "tx-02",
+      "userId": "rider-01",
+      "amount": 100,
+      "type": "WALLET_TOPUP",
+      "description": "Card Top-up (*4242)",
+      "timestamp": "2026-08-30T12:15:37.710Z"
+    }
+  ],
+  "settings": {
+    "surgeMultiplier": 1,
+    "platformCommissionPercent": 20,
+    "autoDispatchEnabled": true,
+    "currencySymbol": "$",
+    "city": "New York, NY"
+  }
+}
