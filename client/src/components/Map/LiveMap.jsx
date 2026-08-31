@@ -79,10 +79,10 @@ export default function LiveMap({
       attributionControl: false
     }).setView(center, zoom);
 
-    // High quality dark tile provider (CartoDB Dark Matter)
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    // OpenStreetMap high-speed clean tile provider (No API key required)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
-      subdomains: 'abcd'
+      subdomains: ['a', 'b', 'c']
     }).addTo(map);
 
     // Add custom zoom control in bottom right
