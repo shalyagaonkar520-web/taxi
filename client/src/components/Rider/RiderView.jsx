@@ -24,7 +24,7 @@ import {
   Zap
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { searchPlaces, getFareQuotes, topupWallet } from '../../services/api';
+import { searchPlaces, getFareQuotes, topupWallet, reverseGeocodePlace, relocateDrivers } from '../../services/api';
 import { socket } from '../../services/socket';
 import { sound } from '../../utils/audio';
 
@@ -55,6 +55,56 @@ export default function RiderView({
   const [pickupSuggestions, setPickupSuggestions] = useState([]);
   const [destSuggestions, setDestSuggestions] = useState([]);
   const [activeInput, setActiveInput] = useState(null);
+  const [locating, setLocating] = useState(false);
+
+  // GPS Current Location Detection
+  const handleUseCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      alert('Geolocation is not supported by your browser.');
+      return;
+    }
+
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const { latitude, longitude } = pos.coords;
+        try {
+          const place = await reverseGeocodePlace(latitude, longitude);
+          setPickup(place);
+          setPickupQuery(place.name || place.address);
+          
+          // Relocate surrounding drivers to user's real location
+          await relocateDrivers(latitude, longitude);
+
+          if (onRideUpdate) {
+            onRideUpdate({
+              userLocation: { lat: latitude, lng: longitude },
+              pickup: place,
+              destination
+            });
+          }
+        } catch (e) {
+          const fallbackPlace = {
+            name: 'Current Location',
+            address: `GPS (${latitude.toFixed(4)}, ${longitude.toFixed(4)})`,
+            lat: latitude,
+            lng: longitude
+          };
+          setPickup(fallbackPlace);
+          setPickupQuery(fallbackPlace.name);
+        } finally {
+          setLocating(false);
+          setActiveInput(null);
+        }
+      },
+      (err) => {
+        console.warn('Geolocation error:', err);
+        setLocating(false);
+        alert('Could not access current location. Please allow browser location access permissions.');
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+  };
 
   // Quotes and Selected Tier
   const [quotes, setQuotes] = useState([]);
@@ -287,11 +337,42 @@ export default function RiderView({
                   onFocus={() => setActiveInput('pickup')}
                   className="bg-transparent text-sm font-medium text-white placeholder-gray-500 w-full focus:outline-none"
                 />
+
+                {/* Use Current Location Quick Action Button */}
+                <button
+                  type="button"
+                  onClick={handleUseCurrentLocation}
+                  disabled={locating}
+                  title="Use My Current Location"
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-uber-accent/20 hover:bg-uber-accent/35 text-uber-accent border border-uber-accent/30 text-[11px] font-bold flex-shrink-0 transition-all active:scale-95 shadow-sm"
+                >
+                  <Navigation className={`w-3.5 h-3.5 ${locating ? 'animate-spin' : ''}`} />
+                  <span className="hidden sm:inline">{locating ? 'Locating...' : 'Current Location'}</span>
+                </button>
               </div>
 
               {/* Suggestions Dropdown */}
-              {activeInput === 'pickup' && pickupSuggestions.length > 0 && (
-                <div className="absolute top-full left-0 right-0 mt-2 glass-dropdown rounded-2xl p-2 shadow-2xl z-50 max-h-56 overflow-y-auto">
+              {activeInput === 'pickup' && (
+                <div className="absolute top-full left-0 right-0 mt-2 glass-dropdown rounded-2xl p-2 shadow-2xl z-50 max-h-64 overflow-y-auto">
+                  
+                  {/* Top GPS Option */}
+                  <button
+                    onClick={handleUseCurrentLocation}
+                    disabled={locating}
+                    className="w-full text-left p-2.5 bg-uber-accent/15 hover:bg-uber-accent/25 border border-uber-accent/30 rounded-xl transition-all flex items-center gap-2.5 mb-1.5 group"
+                  >
+                    <div className="w-7 h-7 rounded-lg bg-uber-accent flex items-center justify-center text-white flex-shrink-0 group-hover:scale-110 transition-transform">
+                      <Navigation className={`w-3.5 h-3.5 ${locating ? 'animate-spin' : ''}`} />
+                    </div>
+                    <div>
+                      <p className="text-xs font-extrabold text-uber-accent flex items-center gap-1">
+                        Use My Current Location
+                        {locating && <span className="text-[10px] text-gray-400 font-normal">(Acquiring GPS...)</span>}
+                      </p>
+                      <p className="text-[10px] text-gray-300">Auto-detect via device GPS and find nearby drivers</p>
+                    </div>
+                  </button>
+
                   {pickupSuggestions.map((s, idx) => (
                     <button
                       key={idx}

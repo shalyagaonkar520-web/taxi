@@ -21,6 +21,20 @@ export async function searchPlaces(query, lat, lng) {
   return res.json();
 }
 
+export async function reverseGeocodePlace(lat, lng) {
+  const res = await fetch(`${API_BASE}/places/reverse?lat=${lat}&lng=${lng}`);
+  return res.json();
+}
+
+export async function relocateDrivers(lat, lng) {
+  const res = await fetch(`${API_BASE}/drivers/relocate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ lat, lng })
+  });
+  return res.json();
+}
+
 export async function getFareQuotes(pickup, destination) {
   const res = await fetch(`${API_BASE}/rides/quotes`, {
     method: 'POST',

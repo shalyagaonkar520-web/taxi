@@ -8,7 +8,7 @@ dotenv.config();
 
 const db = require('./db');
 const { getFareQuotes, calculateFare, VEHICLE_TIERS } = require('./services/pricing');
-const { getDrivingRoute, searchPlaces } = require('./services/routing');
+const { getDrivingRoute, searchPlaces, reverseGeocode } = require('./services/routing');
 const { setupSocketIO } = require('./socket');
 
 const app = express();
@@ -62,12 +62,54 @@ app.get('/api/drivers', (req, res) => {
   res.json(db.getDrivers());
 });
 
+// Relocate drivers around user location
+app.post('/api/drivers/relocate', (req, res) => {
+  const { lat, lng } = req.body;
+  if (!lat || !lng) return res.status(400).json({ error: 'lat and lng are required' });
+
+  const drivers = db.getDrivers();
+  const offsets = [
+    { dLat: 0.005, dLng: 0.004, heading: 45 },
+    { dLat: -0.004, dLng: 0.006, heading: 135 },
+    { dLat: -0.006, dLng: -0.005, heading: 225 },
+    { dLat: 0.004, dLng: -0.006, heading: 315 }
+  ];
+
+  drivers.forEach((driver, idx) => {
+    const off = offsets[idx % offsets.length];
+    db.updateDriver(driver.id, {
+      location: {
+        lat: parseFloat(lat) + off.dLat,
+        lng: parseFloat(lng) + off.dLng,
+        heading: off.heading
+      },
+      status: 'ONLINE'
+    });
+  });
+
+  const updatedDrivers = db.getDrivers();
+  io.emit('init:state', { drivers: updatedDrivers });
+  res.json(updatedDrivers);
+});
+
 // Places Autocomplete / Geocoding
 app.get('/api/places/search', async (req, res) => {
   try {
     const { q, lat, lng } = req.query;
     const places = await searchPlaces(q, parseFloat(lat), parseFloat(lng));
     res.json(places);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Reverse Geocode (Get address from current coordinates)
+app.get('/api/places/reverse', async (req, res) => {
+  try {
+    const { lat, lng } = req.query;
+    if (!lat || !lng) return res.status(400).json({ error: 'lat and lng required' });
+    const place = await reverseGeocode(parseFloat(lat), parseFloat(lng));
+    res.json(place);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

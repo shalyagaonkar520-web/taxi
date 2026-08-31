@@ -25,9 +25,9 @@
       "walletBalance": 840,
       "avatar": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80",
       "location": {
-        "lat": 40.74911217163102,
-        "lng": -73.98554879342268,
-        "heading": 155.74081648008462
+        "lat": 40.75096869252553,
+        "lng": -73.98650514652078,
+        "heading": 152.38037042714313
       },
       "vehicle": {
         "id": "veh-01",
@@ -53,9 +53,9 @@
       "walletBalance": 512,
       "avatar": "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80",
       "location": {
-        "lat": 40.75920725154642,
-        "lng": -73.98492841238254,
-        "heading": 336.38753421889527
+        "lat": 40.760737212189895,
+        "lng": -73.98247587271975,
+        "heading": 0.5723542265432116
       },
       "vehicle": {
         "id": "veh-02",
@@ -81,9 +81,9 @@
       "walletBalance": 1120,
       "avatar": "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80",
       "location": {
-        "lat": 40.74170249397925,
-        "lng": -73.98885668628687,
-        "heading": 329.45535526936226
+        "lat": 40.74017882301982,
+        "lng": -73.9884705074559,
+        "heading": 350.7896708861131
       },
       "vehicle": {
         "id": "veh-03",
@@ -109,9 +109,9 @@
       "walletBalance": 320,
       "avatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
       "location": {
-        "lat": 40.75251763458671,
-        "lng": -73.97746938497552,
-        "heading": 230.4184335605994
+        "lat": 40.7515020586736,
+        "lng": -73.97908378377603,
+        "heading": 203.87706812092142
       },
       "vehicle": {
         "id": "veh-04",

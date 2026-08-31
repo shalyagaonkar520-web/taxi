@@ -102,6 +102,14 @@ export default function LiveMap({
     };
   }, []);
 
+  // Pan to center when center prop changes
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (map && center && center.length === 2 && !routeCoordinates?.length) {
+      map.flyTo(center, zoom || 15, { duration: 1.2 });
+    }
+  }, [center]);
+
   // Update Drivers on Map
   useEffect(() => {
     const map = mapInstanceRef.current;
