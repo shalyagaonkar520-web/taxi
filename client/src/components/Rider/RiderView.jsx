@@ -180,6 +180,10 @@ export default function RiderView({
       onRideUpdate(ride);
     });
 
+    socket.on('ride:cancelled', () => {
+      onRideUpdate(null);
+    });
+
     socket.on('ride:accepted', (data) => {
       onRideUpdate(data.ride);
       sound.playDriverArrived();
@@ -212,6 +216,7 @@ export default function RiderView({
 
     return () => {
       socket.off('ride:created');
+      socket.off('ride:cancelled');
       socket.off('ride:accepted');
       socket.off('ride:driver_arrived');
       socket.off('ride:started');
@@ -626,7 +631,10 @@ export default function RiderView({
           </div>
 
           <button
-            onClick={() => socket.emit('ride:cancel', { rideId: activeRide.id })}
+            onClick={() => socket.emit('ride:cancel', {
+              rideId: activeRide.id,
+              riderId: user?.id || 'rider-01'
+            })}
             className="text-xs text-gray-400 hover:text-uber-red font-semibold transition-colors"
           >
             Cancel Request

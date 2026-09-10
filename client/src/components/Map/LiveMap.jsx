@@ -52,7 +52,7 @@ const createPointIcon = (type = 'pickup') => {
 };
 
 export default function LiveMap({
-  center = [40.758896, -73.985130],
+  center = [12.9716, 77.5946],
   zoom = 14,
   drivers = [],
   pickup = null,

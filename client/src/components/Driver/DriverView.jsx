@@ -27,7 +27,7 @@ export default function DriverView({
   onRideUpdate,
   onStatusChange
 }) {
-  const [isOnline, setIsOnline] = useState(driver?.status === 'ONLINE' || true);
+  const [isOnline, setIsOnline] = useState(driver?.status === 'ONLINE');
   const [incomingRequest, setIncomingRequest] = useState(null);
   const [acceptTimer, setAcceptTimer] = useState(15);
   const [enteredOtp, setEnteredOtp] = useState('');
@@ -156,6 +156,12 @@ export default function DriverView({
     setEnteredOtp('');
   };
 
+  const tripLocation = activeRide?.status === 'ACCEPTED'
+    ? activeRide?.pickup
+    : activeRide?.destination;
+  const driverFare = Number(activeRide?.fare);
+  const fareEarned = Number.isFinite(driverFare) ? `$${(driverFare * 0.8).toFixed(2)}` : '--';
+
   return (
     <div className="w-full max-w-md flex flex-col gap-4">
       {/* 1. ONLINE / OFFLINE TOGGLE & EARNINGS HEADER */}
@@ -238,12 +244,12 @@ export default function DriverView({
                 {activeRide.status === 'ACCEPTED' ? 'Pickup Location' : 'Destination'}
               </span>
               <p className="text-xs font-bold text-white truncate max-w-[220px] mt-0.5">
-                {activeRide.status === 'ACCEPTED' ? activeRide.pickup.address : activeRide.destination.address}
+                {tripLocation?.address || 'Location pending'}
               </p>
             </div>
             <div className="text-right">
               <span className="text-[10px] text-gray-400">Fare Earned</span>
-              <p className="text-sm font-extrabold text-uber-green">${(activeRide.fare * 0.8).toFixed(2)}</p>
+              <p className="text-sm font-extrabold text-uber-green">{fareEarned}</p>
             </div>
           </div>
 
@@ -296,7 +302,7 @@ export default function DriverView({
               className="w-full py-4 rounded-2xl bg-gradient-to-r from-uber-green to-emerald-600 hover:from-uber-greenHover hover:to-emerald-700 font-extrabold text-black text-sm shadow-xl shadow-uber-green/30 active:scale-98 transition-all flex items-center justify-center gap-2"
             >
               <CheckCircle className="w-4 h-4" />
-              <span>Complete Trip & Collect ${(activeRide.fare * 0.8).toFixed(2)}</span>
+              <span>Complete Trip & Collect {fareEarned}</span>
             </button>
           )}
         </div>
