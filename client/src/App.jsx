@@ -18,6 +18,7 @@ export default function App() {
   const [previewRoute, setPreviewRoute] = useState([]);
   const [previewPickup, setPreviewPickup] = useState(null);
   const [previewDestination, setPreviewDestination] = useState(null);
+  const [mapCenter, setMapCenter] = useState([12.9716, 77.5946]);
   const [isConnected, setIsConnected] = useState(socket.connected);
 
   // Modals
@@ -120,12 +121,24 @@ export default function App() {
       setPreviewRoute([]);
       return;
     }
+    if (data.userLocation) {
+      setMapCenter([data.userLocation.lat, data.userLocation.lng]);
+    }
     if (data.previewRoute) {
       setPreviewRoute(data.previewRoute);
       setPreviewPickup(data.pickup);
       setPreviewDestination(data.destination);
+      if (data.pickup && data.pickup.lat && !data.userLocation) {
+        setMapCenter([data.pickup.lat, data.pickup.lng]);
+      }
+    } else if (data.userLocation && !data.id) {
+      setPreviewPickup(data.pickup || null);
+      setPreviewDestination(data.destination || null);
     } else {
       setActiveRide(data);
+      if (data.pickup && data.pickup.lat) {
+        setMapCenter([data.pickup.lat, data.pickup.lng]);
+      }
     }
   };
 
@@ -186,7 +199,7 @@ export default function App() {
         {/* Live Background Interactive Map */}
         <div className="absolute inset-0 z-0">
           <LiveMap
-            center={[40.752726, -73.977229]}
+            center={mapCenter}
             zoom={14}
             drivers={drivers}
             pickup={mapPickup}

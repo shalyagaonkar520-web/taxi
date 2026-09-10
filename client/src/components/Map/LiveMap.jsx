@@ -52,7 +52,7 @@ const createPointIcon = (type = 'pickup') => {
 };
 
 export default function LiveMap({
-  center = [40.758896, -73.985130],
+  center = [12.9716, 77.5946],
   zoom = 14,
   drivers = [],
   pickup = null,
@@ -79,10 +79,10 @@ export default function LiveMap({
       attributionControl: false
     }).setView(center, zoom);
 
-    // High quality dark tile provider (CartoDB Dark Matter)
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    // OpenStreetMap high-speed clean tile provider (No API key required)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
-      subdomains: 'abcd'
+      subdomains: ['a', 'b', 'c']
     }).addTo(map);
 
     // Add custom zoom control in bottom right
@@ -101,6 +101,14 @@ export default function LiveMap({
       mapInstanceRef.current = null;
     };
   }, []);
+
+  // Pan to center when center prop changes
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (map && center && center.length === 2 && !routeCoordinates?.length) {
+      map.flyTo(center, zoom || 15, { duration: 1.2 });
+    }
+  }, [center]);
 
   // Update Drivers on Map
   useEffect(() => {

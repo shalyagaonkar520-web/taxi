@@ -136,7 +136,7 @@ async function getDrivingRoute(start, end) {
 async function searchPlaces(query, centerLat, centerLng) {
   if (!query || query.trim().length < 2) return [];
 
-  // Popular curated landmarks for instant responsive selection
+  // Popular curated landmarks
   const KNOWN_PLACES = [
     { name: 'Empire State Building', address: '20 W 34th St, New York, NY 10001', lat: 40.748817, lng: -73.985428 },
     { name: 'Times Square', address: 'Broadway, New York, NY 10036', lat: 40.758896, lng: -73.985130 },
@@ -153,31 +153,50 @@ async function searchPlaces(query, centerLat, centerLng) {
     p.address.toLowerCase().includes(query.toLowerCase())
   );
 
+  // Try Photon geocoding API first (fast & reliable)
   try {
-    const encoded = encodeURIComponent(query);
-    const viewbox = centerLat && centerLng ? `&viewbox=${centerLng - 0.5},${centerLat + 0.5},${centerLng + 0.5},${centerLat - 0.5}` : '';
-    const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encoded}&limit=6${viewbox}`;
-    const results = await fetchJson(url);
+    const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=6${
+      centerLat && centerLng ? `&lat=${centerLat}&lon=${centerLng}` : ''
+    }`;
+    const photonData = await fetchJson(photonUrl);
 
-    if (Array.isArray(results) && results.length > 0) {
-      const formatted = results.map(r => ({
-        name: r.display_name.split(',')[0],
-        address: r.display_name,
-        lat: parseFloat(r.lat),
-        lng: parseFloat(r.lon)
-      }));
+    if (photonData && photonData.features && photonData.features.length > 0) {
+      const places = photonData.features.map(f => {
+        const props = f.properties || {};
+        const name = props.name || props.street || query;
+        const details = [props.street, props.city || props.county, props.state, props.country]
+          .filter(Boolean)
+          .join(', ');
+        return {
+          name,
+          address: details ? `${name}, ${details}` : name,
+          lat: f.geometry.coordinates[1],
+          lng: f.geometry.coordinates[0]
+        };
+      });
 
-      // Combine with unique local matches
       const combined = [...matchedLocal];
-      formatted.forEach(f => {
-        if (!combined.some(c => Math.abs(c.lat - f.lat) < 0.0001 && Math.abs(c.lng - f.lng) < 0.0001)) {
-          combined.push(f);
+      places.forEach(p => {
+        if (!combined.some(c => Math.abs(c.lat - p.lat) < 0.0001 && Math.abs(c.lng - p.lng) < 0.0001)) {
+          combined.push(p);
         }
       });
       return combined.slice(0, 8);
     }
   } catch (err) {
-    console.warn('Geocoding search failed, using landmark database:', err.message);
+    // Try Nominatim as fallback
+    try {
+      const nomUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=6`;
+      const results = await fetchJson(nomUrl);
+      if (Array.isArray(results) && results.length > 0) {
+        return results.map(r => ({
+          name: r.display_name.split(',')[0],
+          address: r.display_name,
+          lat: parseFloat(r.lat),
+          lng: parseFloat(r.lon)
+        }));
+      }
+    } catch (e) {}
   }
 
   return matchedLocal.length > 0 ? matchedLocal : [
@@ -190,9 +209,56 @@ async function searchPlaces(query, centerLat, centerLng) {
   ];
 }
 
+/**
+ * Reverse Geocode coordinates to address
+ */
+async function reverseGeocode(lat, lng) {
+  // Try Photon reverse geocoding first
+  try {
+    const photonUrl = `https://photon.komoot.io/reverse?lat=${lat}&lon=${lng}`;
+    const data = await fetchJson(photonUrl);
+    if (data && data.features && data.features.length > 0) {
+      const props = data.features[0].properties || {};
+      const name = props.name || props.street || 'Current Location';
+      const address = [props.street, props.city || props.district, props.state, props.country]
+        .filter(Boolean)
+        .join(', ');
+      return {
+        name,
+        address: address ? `${name}, ${address}` : name,
+        lat: parseFloat(lat),
+        lng: parseFloat(lng)
+      };
+    }
+  } catch (err) {
+    // Fallback to Nominatim
+    try {
+      const nomUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`;
+      const nomData = await fetchJson(nomUrl);
+      if (nomData && nomData.display_name) {
+        return {
+          name: nomData.display_name.split(',')[0] || 'Current Location',
+          address: nomData.display_name,
+          lat: parseFloat(lat),
+          lng: parseFloat(lng)
+        };
+      }
+    } catch (e) {}
+  }
+
+  return {
+    name: 'Current Location',
+    address: `GPS (${parseFloat(lat).toFixed(4)}, ${parseFloat(lng).toFixed(4)})`,
+    lat: parseFloat(lat),
+    lng: parseFloat(lng)
+  };
+}
+
 module.exports = {
   calculateHaversineDistance,
   calculateHeading,
   getDrivingRoute,
-  searchPlaces
+  searchPlaces,
+  reverseGeocode
 };
+

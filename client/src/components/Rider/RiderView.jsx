@@ -24,7 +24,7 @@ import {
   Zap
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { searchPlaces, getFareQuotes, topupWallet } from '../../services/api';
+import { searchPlaces, getFareQuotes, topupWallet, reverseGeocodePlace, relocateDrivers } from '../../services/api';
 import { socket } from '../../services/socket';
 import { sound } from '../../utils/audio';
 
@@ -36,25 +36,111 @@ export default function RiderView({
   onOpenWallet,
   onOpenHistory
 }) {
-  // Address selection state
+  // Address selection state (starts clean without pre-filling foreign cities)
   const [pickup, setPickup] = useState({
-    name: 'Empire State Building',
-    address: '20 W 34th St, New York, NY 10001',
-    lat: 40.748817,
-    lng: -73.985428
+    name: 'Current Location',
+    address: 'Detecting your location...',
+    lat: 12.9716,
+    lng: 77.5946
   });
-  const [destination, setDestination] = useState({
-    name: 'Times Square',
-    address: 'Broadway, New York, NY 10036',
-    lat: 40.758896,
-    lng: -73.985130
-  });
+  const [destination, setDestination] = useState(null);
 
-  const [pickupQuery, setPickupQuery] = useState(pickup?.name || '');
-  const [destQuery, setDestQuery] = useState(destination?.name || '');
+  const [pickupQuery, setPickupQuery] = useState('');
+  const [destQuery, setDestQuery] = useState('');
   const [pickupSuggestions, setPickupSuggestions] = useState([]);
   const [destSuggestions, setDestSuggestions] = useState([]);
   const [activeInput, setActiveInput] = useState(null);
+  const [locating, setLocating] = useState(false);
+  const destInputRef = useRef(null);
+
+  // Auto-detect location on initial load if possible
+  useEffect(() => {
+    if (navigator.geolocation && !pickupQuery) {
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          const { latitude, longitude } = pos.coords;
+          try {
+            const place = await reverseGeocodePlace(latitude, longitude);
+            setPickup(place);
+            setPickupQuery(place.name || place.address);
+            await relocateDrivers(latitude, longitude);
+            if (onRideUpdate) {
+              onRideUpdate({
+                userLocation: { lat: latitude, lng: longitude },
+                pickup: place,
+                destination: null
+              });
+            }
+          } catch (e) {}
+        },
+        () => {},
+        { timeout: 5000 }
+      );
+    }
+  }, []);
+
+  // GPS Current Location Detection Button
+  const handleUseCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      alert('Geolocation is not supported by your browser.');
+      return;
+    }
+
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const { latitude, longitude } = pos.coords;
+        try {
+          const place = await reverseGeocodePlace(latitude, longitude);
+          setPickup(place);
+          setPickupQuery(place.name || place.address);
+          
+          // Clear any previous destination to prevent mismatched cross-city routes
+          setDestination(null);
+          setDestQuery('');
+          setRouteInfo(null);
+          setQuotes([]);
+          
+          // Relocate surrounding active drivers to user's real neighborhood
+          await relocateDrivers(latitude, longitude);
+
+          if (onRideUpdate) {
+            onRideUpdate({
+              userLocation: { lat: latitude, lng: longitude },
+              pickup: place,
+              destination: null,
+              previewRoute: []
+            });
+          }
+
+          // Auto focus destination input
+          setActiveInput('dest');
+          setTimeout(() => {
+            destInputRef.current?.focus();
+          }, 100);
+        } catch (e) {
+          const fallbackPlace = {
+            name: 'Current Location',
+            address: `GPS (${latitude.toFixed(4)}, ${longitude.toFixed(4)})`,
+            lat: latitude,
+            lng: longitude
+          };
+          setPickup(fallbackPlace);
+          setPickupQuery(fallbackPlace.name);
+          setDestination(null);
+          setDestQuery('');
+        } finally {
+          setLocating(false);
+        }
+      },
+      (err) => {
+        console.warn('Geolocation error:', err);
+        setLocating(false);
+        alert('Could not access current location. Please allow browser location access permissions in your browser bar.');
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+  };
 
   // Quotes and Selected Tier
   const [quotes, setQuotes] = useState([]);
@@ -82,6 +168,9 @@ export default function RiderView({
   useEffect(() => {
     if (pickup && destination && !activeRide) {
       calculateTripQuotes();
+    } else {
+      setQuotes([]);
+      setRouteInfo(null);
     }
   }, [pickup, destination]);
 
@@ -89,6 +178,10 @@ export default function RiderView({
   useEffect(() => {
     socket.on('ride:created', (ride) => {
       onRideUpdate(ride);
+    });
+
+    socket.on('ride:cancelled', () => {
+      onRideUpdate(null);
     });
 
     socket.on('ride:accepted', (data) => {
@@ -123,6 +216,7 @@ export default function RiderView({
 
     return () => {
       socket.off('ride:created');
+      socket.off('ride:cancelled');
       socket.off('ride:accepted');
       socket.off('ride:driver_arrived');
       socket.off('ride:started');
@@ -287,11 +381,42 @@ export default function RiderView({
                   onFocus={() => setActiveInput('pickup')}
                   className="bg-transparent text-sm font-medium text-white placeholder-gray-500 w-full focus:outline-none"
                 />
+
+                {/* Use Current Location Quick Action Button */}
+                <button
+                  type="button"
+                  onClick={handleUseCurrentLocation}
+                  disabled={locating}
+                  title="Use My Current Location"
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-uber-accent/20 hover:bg-uber-accent/35 text-uber-accent border border-uber-accent/30 text-[11px] font-bold flex-shrink-0 transition-all active:scale-95 shadow-sm"
+                >
+                  <Navigation className={`w-3.5 h-3.5 ${locating ? 'animate-spin' : ''}`} />
+                  <span className="hidden sm:inline">{locating ? 'Locating...' : 'Current Location'}</span>
+                </button>
               </div>
 
               {/* Suggestions Dropdown */}
-              {activeInput === 'pickup' && pickupSuggestions.length > 0 && (
-                <div className="absolute top-full left-0 right-0 mt-2 glass-dropdown rounded-2xl p-2 shadow-2xl z-50 max-h-56 overflow-y-auto">
+              {activeInput === 'pickup' && (
+                <div className="absolute top-full left-0 right-0 mt-2 glass-dropdown rounded-2xl p-2 shadow-2xl z-50 max-h-64 overflow-y-auto">
+                  
+                  {/* Top GPS Option */}
+                  <button
+                    onClick={handleUseCurrentLocation}
+                    disabled={locating}
+                    className="w-full text-left p-2.5 bg-uber-accent/15 hover:bg-uber-accent/25 border border-uber-accent/30 rounded-xl transition-all flex items-center gap-2.5 mb-1.5 group"
+                  >
+                    <div className="w-7 h-7 rounded-lg bg-uber-accent flex items-center justify-center text-white flex-shrink-0 group-hover:scale-110 transition-transform">
+                      <Navigation className={`w-3.5 h-3.5 ${locating ? 'animate-spin' : ''}`} />
+                    </div>
+                    <div>
+                      <p className="text-xs font-extrabold text-uber-accent flex items-center gap-1">
+                        Use My Current Location
+                        {locating && <span className="text-[10px] text-gray-400 font-normal">(Acquiring GPS...)</span>}
+                      </p>
+                      <p className="text-[10px] text-gray-300">Auto-detect via device GPS and find nearby drivers</p>
+                    </div>
+                  </button>
+
                   {pickupSuggestions.map((s, idx) => (
                     <button
                       key={idx}
@@ -314,18 +439,36 @@ export default function RiderView({
               <div className="flex items-center gap-3 bg-black/50 p-3 rounded-2xl border border-white/10 focus-within:border-uber-red transition-all">
                 <div className="w-3 h-3 rounded-full bg-uber-red ring-4 ring-uber-red/20 flex-shrink-0" />
                 <input
+                  ref={destInputRef}
                   type="text"
-                  placeholder="Where are you going?"
+                  placeholder="Where are you going? (e.g. Airport, Mall, Station)"
                   value={destQuery}
                   onChange={(e) => handleSearch(e.target.value, 'dest')}
                   onFocus={() => setActiveInput('dest')}
                   className="bg-transparent text-sm font-medium text-white placeholder-gray-500 w-full focus:outline-none"
                 />
+                {destination && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDestination(null);
+                      setDestQuery('');
+                      setQuotes([]);
+                      setRouteInfo(null);
+                      if (onRideUpdate) {
+                        onRideUpdate({ pickup, destination: null, previewRoute: [] });
+                      }
+                    }}
+                    className="text-gray-400 hover:text-white p-1"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
               </div>
 
               {/* Suggestions Dropdown */}
               {activeInput === 'dest' && destSuggestions.length > 0 && (
-                <div className="absolute top-full left-0 right-0 mt-2 glass-dropdown rounded-2xl p-2 shadow-2xl z-50 max-h-56 overflow-y-auto">
+                <div className="absolute top-full left-0 right-0 mt-2 glass-dropdown rounded-2xl p-2 shadow-2xl z-50 max-h-64 overflow-y-auto">
                   {destSuggestions.map((s, idx) => (
                     <button
                       key={idx}
@@ -344,95 +487,122 @@ export default function RiderView({
             </div>
           </div>
 
-          {/* Vehicle Tier Picker */}
-          <div className="flex flex-col gap-2">
-            <label className="text-xs font-bold uppercase tracking-wider text-gray-400">
-              Choose a ride
-            </label>
-            
-            <div className="flex flex-col gap-2 max-h-60 overflow-y-auto pr-1">
-              {loadingQuotes ? (
-                <div className="py-8 text-center text-xs text-gray-400 animate-pulse">
-                  Calculating real-time route & fares...
-                </div>
-              ) : quotes.map((tier) => {
-                const isSelected = selectedTier === tier.id;
-                return (
-                  <div
-                    key={tier.id}
-                    onClick={() => setSelectedTier(tier.id)}
-                    className={`flex items-center justify-between p-3 rounded-2xl cursor-pointer transition-all border ${
-                      isSelected
-                        ? 'bg-uber-accent/15 border-uber-accent shadow-lg shadow-uber-accent/10'
-                        : 'bg-black/30 border-white/5 hover:bg-white/5 hover:border-white/10'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <img
-                        src={tier.image}
-                        alt={tier.name}
-                        className="w-12 h-9 object-cover rounded-lg"
-                      />
-                      <div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-sm font-bold text-white">{tier.name}</span>
-                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-white/10 text-gray-300 font-semibold">
-                            👤 {tier.capacity}
-                          </span>
+          {/* Vehicle Tier Picker (Only when destination is selected) */}
+          {destination ? (
+            <div className="flex flex-col gap-2">
+              <label className="text-xs font-bold uppercase tracking-wider text-gray-400">
+                Choose a ride
+              </label>
+              
+              <div className="flex flex-col gap-2 max-h-60 overflow-y-auto pr-1">
+                {loadingQuotes ? (
+                  <div className="py-8 text-center text-xs text-gray-400 animate-pulse">
+                    Calculating real-time route & fares...
+                  </div>
+                ) : quotes.map((tier) => {
+                  const isSelected = selectedTier === tier.id;
+                  return (
+                    <div
+                      key={tier.id}
+                      onClick={() => setSelectedTier(tier.id)}
+                      className={`flex items-center justify-between p-3 rounded-2xl cursor-pointer transition-all border ${
+                        isSelected
+                          ? 'bg-uber-accent/15 border-uber-accent shadow-lg shadow-uber-accent/10'
+                          : 'bg-black/30 border-white/5 hover:bg-white/5 hover:border-white/10'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <img
+                          src={tier.image}
+                          alt={tier.name}
+                          className="w-12 h-9 object-cover rounded-lg"
+                        />
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-sm font-bold text-white">{tier.name}</span>
+                            <span className="text-[10px] px-1.5 py-0.2 rounded bg-white/10 text-gray-300 font-semibold">
+                              👤 {tier.capacity}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-gray-400">{tier.etaMin} mins away • {tier.tagline}</p>
                         </div>
-                        <p className="text-[11px] text-gray-400">{tier.etaMin} mins away • {tier.tagline}</p>
+                      </div>
+
+                      <div className="text-right">
+                        <p className="text-base font-extrabold text-white">
+                          ${tier.totalFare}
+                        </p>
+                        {tier.surgeMultiplier > 1 && (
+                          <span className="text-[10px] font-bold text-uber-gold flex items-center justify-end gap-0.5">
+                            <Zap className="w-3 h-3 fill-uber-gold" /> {tier.surgeMultiplier}x Surge
+                          </span>
+                        )}
                       </div>
                     </div>
+                  );
+                })}
+              </div>
 
-                    <div className="text-right">
-                      <p className="text-base font-extrabold text-white">
-                        ${tier.totalFare}
-                      </p>
-                      {tier.surgeMultiplier > 1 && (
-                        <span className="text-[10px] font-bold text-uber-gold flex items-center justify-end gap-0.5">
-                          <Zap className="w-3 h-3 fill-uber-gold" /> {tier.surgeMultiplier}x Surge
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+              {/* Payment & Promo */}
+              <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-3 text-xs">
+                <button
+                  onClick={onOpenWallet}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-black/40 border border-white/10 hover:bg-white/5 text-gray-300 font-semibold"
+                >
+                  <Wallet className="w-3.5 h-3.5 text-uber-accent" />
+                  <span>Wallet (${Number(user?.walletBalance || 0).toFixed(2)})</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    const code = prompt('Enter Promo Code (Try "SAVE20"):');
+                    if (code && code.toUpperCase() === 'SAVE20') {
+                      setDiscountPercent(20);
+                      alert('20% Discount applied successfully!');
+                    }
+                  }}
+                  className="flex items-center gap-1 text-uber-accent hover:underline font-semibold"
+                >
+                  {discountPercent > 0 ? `🎉 ${discountPercent}% OFF` : '+ Promo Code'}
+                </button>
+              </div>
+
+              {/* Request Button */}
+              <button
+                onClick={handleRequestRide}
+                className="w-full py-4 rounded-2xl bg-gradient-to-r from-uber-accent to-blue-500 hover:from-uber-accentHover hover:to-blue-600 font-extrabold text-white text-base shadow-xl shadow-uber-accent/30 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
+              >
+                <span>Request {selectedQuote?.name || 'Ride'}</span>
+                <span className="text-sm font-normal text-blue-200">(${finalFare})</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
             </div>
-          </div>
+          ) : (
+            /* Guidance when destination not yet entered */
+            <div className="flex flex-col gap-3 p-4 rounded-2xl bg-black/30 border border-white/5 text-center">
+              <div className="flex items-center justify-center gap-1.5 text-xs text-gray-400 font-medium">
+                <Navigation className="w-3.5 h-3.5 text-uber-accent" />
+                <span>Enter a destination above to see available cars & live pricing</span>
+              </div>
 
-          {/* Payment & Promo */}
-          <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-3 text-xs">
-            <button
-              onClick={onOpenWallet}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-black/40 border border-white/10 hover:bg-white/5 text-gray-300 font-semibold"
-            >
-              <Wallet className="w-3.5 h-3.5 text-uber-accent" />
-              <span>Wallet (${Number(user?.walletBalance || 0).toFixed(2)})</span>
-            </button>
-
-            <button
-              onClick={() => {
-                const code = prompt('Enter Promo Code (Try "SAVE20"):');
-                if (code && code.toUpperCase() === 'SAVE20') {
-                  setDiscountPercent(20);
-                  alert('20% Discount applied successfully!');
-                }
-              }}
-              className="flex items-center gap-1 text-uber-accent hover:underline font-semibold"
-            >
-              {discountPercent > 0 ? `🎉 ${discountPercent}% OFF` : '+ Promo Code'}
-            </button>
-          </div>
-
-          {/* Request Button */}
-          <button
-            onClick={handleRequestRide}
-            className="w-full py-4 rounded-2xl bg-gradient-to-r from-uber-accent to-blue-500 hover:from-uber-accentHover hover:to-blue-600 font-extrabold text-white text-base shadow-xl shadow-uber-accent/30 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
-          >
-            <span>Request {selectedQuote?.name || 'Ride'}</span>
-            <span className="text-sm font-normal text-blue-200">(${finalFare})</span>
-            <ArrowRight className="w-4 h-4" />
-          </button>
+              {/* Quick Popular Suggestions */}
+              <div className="flex flex-wrap items-center justify-center gap-1.5 pt-1">
+                {['✈️ Airport', '🚆 Train Station', '🛍️ City Mall', '🏢 Tech Park'].map((tag) => (
+                  <button
+                    key={tag}
+                    onClick={() => {
+                      const cleanName = tag.split(' ').slice(1).join(' ');
+                      handleSearch(cleanName, 'dest');
+                      setActiveInput('dest');
+                    }}
+                    className="px-2.5 py-1 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] text-gray-300 font-semibold transition-all hover:scale-105"
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -461,7 +631,10 @@ export default function RiderView({
           </div>
 
           <button
-            onClick={() => socket.emit('ride:cancel', { rideId: activeRide.id })}
+            onClick={() => socket.emit('ride:cancel', {
+              rideId: activeRide.id,
+              riderId: user?.id || 'rider-01'
+            })}
             className="text-xs text-gray-400 hover:text-uber-red font-semibold transition-colors"
           >
             Cancel Request

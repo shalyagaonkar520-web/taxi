@@ -8,12 +8,22 @@ function setupSocketIO(io) {
   // Simulated trip timers for smooth automated navigation when needed
   const activeSimulations = new Map();
 
+  // Do not restore abandoned dispatch requests after a server restart.
+  db.getRides()
+    .filter(ride => ride.status === 'REQUESTED')
+    .filter(ride => Date.now() - new Date(ride.createdAt).getTime() > 30000)
+    .forEach(ride => db.updateRide(ride.id, {
+      status: 'CANCELLED',
+      cancelledAt: new Date().toISOString(),
+      cancellationReason: 'Dispatch request expired'
+    }));
+
   io.on('connection', (socket) => {
     let currentUserId = null;
     let currentUserRole = null;
 
     // Join with user identity
-    socket.on('user:register', ({ userId, role }) => {
+    socket.on('user:register', async ({ userId, role }) => {
       currentUserId = userId;
       currentUserRole = role;
       userSockets.set(userId, socket.id);
@@ -28,6 +38,28 @@ function setupSocketIO(io) {
         activeRide: db.getActiveRideForUser(userId),
         settings: db.getSettings()
       });
+
+      // Re-deliver pending requests when a driver connects after dispatch.
+      if (role === 'DRIVER') {
+        const pendingRide = db.getRides().find(ride => ride.status === 'REQUESTED' && !ride.driverId);
+        const driver = db.getDriverById(userId);
+        if (pendingRide && driver?.status === 'ONLINE') {
+          const rider = db.getUserById(pendingRide.riderId);
+          const toPickupRoute = await getDrivingRoute(driver.location, pendingRide.pickup);
+          const settings = db.getSettings();
+          socket.emit('ride:incoming_request', {
+            ride: pendingRide,
+            rider: {
+              name: rider?.name || 'Passenger',
+              rating: rider?.rating || 4.9,
+              avatar: rider?.avatar
+            },
+            pickupDistanceKm: toPickupRoute.distanceKm,
+            pickupDurationMin: toPickupRoute.durationMin,
+            estimatedEarnings: Number((pendingRide.fare * (1 - settings.platformCommissionPercent / 100)).toFixed(2))
+          });
+        }
+      }
     });
 
     // Driver location update from device GPS
@@ -133,6 +165,21 @@ function setupSocketIO(io) {
           simulateAutoDriverAcceptance(io, newRide.id);
         }, 3000);
       }
+    });
+
+    // Rider cancels a request before a driver accepts it.
+    socket.on('ride:cancel', ({ rideId, riderId }) => {
+      const ride = db.getRideById(rideId);
+      if (!ride || ride.riderId !== riderId || !['REQUESTED', 'MATCHING'].includes(ride.status)) return;
+
+      const updatedRide = db.updateRide(rideId, {
+        status: 'CANCELLED',
+        cancelledAt: new Date().toISOString(),
+        cancellationReason: 'Cancelled by rider'
+      });
+
+      io.to(`user:${ride.riderId}`).emit('ride:cancelled', { ride: updatedRide });
+      io.to('role:admin').emit('admin:ride_event', { type: 'RIDE_CANCELLED', ride: updatedRide });
     });
 
     // Driver accepts ride request
