@@ -70,7 +70,11 @@ To run both backend and frontend concurrently with one command:
 npm run dev
 ```
 
-- **Frontend Client**: [http://localhost:5173](http://localhost:5173)
+- **Role workspaces**:
+  - Rider: [http://localhost:5173/rider](http://localhost:5173/rider)
+  - Driver: [http://localhost:5173/driver](http://localhost:5173/driver)
+  - Admin: [http://localhost:5173/admin](http://localhost:5173/admin)
+- **Workspace launcher**: [http://localhost:5173](http://localhost:5173)
 - **Backend API & WebSocket Server**: [http://localhost:5000](http://localhost:5000)
 
 ---
