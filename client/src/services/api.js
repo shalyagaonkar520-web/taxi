@@ -42,6 +42,19 @@ export async function fetchDrivers() {
   return request('/drivers');
 }
 
+export async function updateUserProfile(userId, profile) {
+  const result = await request(`/users/${userId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(profile)
+  });
+  return result.user;
+}
+
+export async function fetchNearbyPlaces(lat, lng, category = 'tourism') {
+  return request(`/places/nearby?lat=${lat}&lng=${lng}&category=${encodeURIComponent(category)}`);
+}
+
 export async function searchPlaces(query, lat, lng) {
   if (!query) return [];
   const params = new URLSearchParams({ q: query });

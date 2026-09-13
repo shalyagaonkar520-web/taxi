@@ -18,6 +18,7 @@ export default function Navbar({
   walletBalance, 
   onOpenWallet,
   onOpenHistory,
+  onOpenProfile,
   isConnected 
 }) {
   const [showUserDropdown, setShowUserDropdown] = useState(false);
@@ -45,7 +46,7 @@ export default function Navbar({
         </div>
 
         <div className="hidden sm:flex items-center px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 text-xs font-semibold text-gray-300">
-          {currentRole === 'RIDER' ? 'Rider workspace' : currentRole === 'DRIVER' ? 'Driver workspace' : 'Admin workspace'}
+          {currentRole === 'RIDER' ? 'User workspace' : currentRole === 'DRIVER' ? 'Driver workspace' : 'Admin workspace'}
         </div>
 
         {/* Right Section: Connection, Wallet & Profile */}
@@ -71,15 +72,16 @@ export default function Navbar({
             </button>
           )}
 
-          {/* User History Button */}
+          {/* User history and profile */}
           {currentRole === 'RIDER' && (
-            <button
-              onClick={onOpenHistory}
-              title="Ride History"
-              className="p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300 hover:text-white transition-all"
-            >
-              <Clock className="w-4 h-4" />
-            </button>
+            <>
+              <button onClick={onOpenHistory} title="Your trips" className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs text-gray-300 hover:text-white transition-all">
+                <Clock className="w-4 h-4" /><span className="hidden sm:inline">Trips</span>
+              </button>
+              <button onClick={onOpenProfile} title="Edit profile" className="p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300 hover:text-white transition-all">
+                <User className="w-4 h-4" />
+              </button>
+            </>
           )}
 
           {/* User Avatar */}

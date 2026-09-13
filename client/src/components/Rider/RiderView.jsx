@@ -24,7 +24,7 @@ import {
   Zap
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { searchPlaces, getFareQuotes, topupWallet, reverseGeocodePlace, relocateDrivers } from '../../services/api';
+import { searchPlaces, getFareQuotes, topupWallet, reverseGeocodePlace, relocateDrivers, fetchNearbyPlaces } from '../../services/api';
 import { socket } from '../../services/socket';
 import { sound } from '../../utils/audio';
 
@@ -51,9 +51,24 @@ export default function RiderView({
   const [destSuggestions, setDestSuggestions] = useState([]);
   const [activeInput, setActiveInput] = useState(null);
   const [locating, setLocating] = useState(false);
+  const [exploreMode, setExploreMode] = useState(false);
+  const [exploreCategory, setExploreCategory] = useState('tourism');
+  const [nearbyPlaces, setNearbyPlaces] = useState([]);
+  const [loadingPlaces, setLoadingPlaces] = useState(false);
   const destInputRef = useRef(null);
 
     const quickDestinations = ['Airport', 'Mall', 'Station'];
+
+    useEffect(() => {
+      if (!exploreMode || !pickup?.lat || !pickup?.lng) return;
+      let active = true;
+      setLoadingPlaces(true);
+      fetchNearbyPlaces(pickup.lat, pickup.lng, exploreCategory)
+        .then((places) => { if (active) setNearbyPlaces(places || []); })
+        .catch(() => { if (active) setNearbyPlaces([]); })
+        .finally(() => { if (active) setLoadingPlaces(false); });
+      return () => { active = false; };
+    }, [exploreMode, exploreCategory, pickup?.lat, pickup?.lng]);
 
   // Auto-detect location on initial load if possible
   useEffect(() => {
@@ -506,6 +521,35 @@ export default function RiderView({
                 {place}
               </button>
             ))}
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold text-white">Explore nearby</p>
+                <p className="text-[11px] text-gray-400">Discover popular places within 50 km</p>
+              </div>
+              <button type="button" onClick={() => setExploreMode((enabled) => !enabled)} aria-pressed={exploreMode} className={`relative h-6 w-11 rounded-full transition ${exploreMode ? 'bg-uber-accent' : 'bg-white/15'}`}>
+                <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition ${exploreMode ? 'left-6' : 'left-1'}`} />
+              </button>
+            </div>
+            {exploreMode && (
+              <>
+                <div className="flex gap-2 mt-3">
+                  {[['tourism', 'Places'], ['food', 'Food']].map(([value, label]) => (
+                    <button key={value} type="button" onClick={() => setExploreCategory(value)} className={`rounded-lg px-3 py-1.5 text-[11px] font-semibold ${exploreCategory === value ? 'bg-uber-accent text-white' : 'bg-white/5 text-gray-400'}`}>{label}</button>
+                  ))}
+                </div>
+                <div className="mt-3 grid gap-2 max-h-48 overflow-y-auto">
+                  {loadingPlaces ? <p className="text-xs text-gray-500 py-3">Finding nearby recommendations...</p> : nearbyPlaces.length === 0 ? <p className="text-xs text-gray-500 py-3">Use Current Location to discover nearby places.</p> : nearbyPlaces.map((place) => (
+                    <button key={`${place.name}-${place.lat}`} type="button" onClick={() => selectPlace(place, 'dest')} className="text-left rounded-xl border border-white/5 bg-black/20 px-3 py-2 hover:border-uber-accent/40">
+                      <div className="flex items-center justify-between gap-2"><span className="text-xs font-bold text-white truncate">{place.name}</span><span className="text-[10px] text-uber-accent whitespace-nowrap">{place.distanceKm} km</span></div>
+                      <p className="text-[10px] text-gray-500 truncate mt-0.5">{place.address}</p>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
 
           {/* Vehicle Tier Picker (Only when destination is selected) */}

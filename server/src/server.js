@@ -10,7 +10,7 @@ dotenv.config();
 
 const db = require('./db');
 const { getFareQuotes, calculateFare, VEHICLE_TIERS } = require('./services/pricing');
-const { getDrivingRoute, searchPlaces, reverseGeocode } = require('./services/routing');
+const { getDrivingRoute, searchPlaces, reverseGeocode, calculateHaversineDistance } = require('./services/routing');
 const { setupSocketIO } = require('./socket');
 
 const app = express();
@@ -140,6 +140,18 @@ app.get('/api/users/:id', (req, res) => {
   res.json(user);
 });
 
+app.patch('/api/users/:id', (req, res) => {
+  const { name, email, phone, avatar } = req.body || {};
+  const user = db.updateUser(req.params.id, {
+    ...(typeof name === 'string' && name.trim() ? { name: name.trim() } : {}),
+    ...(typeof email === 'string' && email.trim() ? { email: email.trim().toLowerCase() } : {}),
+    ...(typeof phone === 'string' ? { phone: phone.trim() } : {}),
+    ...(typeof avatar === 'string' ? { avatar: avatar.trim() } : {})
+  });
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  res.json({ user: db.sanitizeUser(user) });
+});
+
 // Drivers list
 app.get('/api/drivers', (req, res) => {
   res.json(db.getDrivers());
@@ -183,6 +195,32 @@ app.get('/api/places/search', async (req, res) => {
     res.json(places);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/places/nearby', async (req, res) => {
+  const lat = parseFloat(req.query.lat);
+  const lng = parseFloat(req.query.lng);
+  const category = String(req.query.category || 'tourism');
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return res.status(400).json({ error: 'Valid lat and lng are required' });
+  }
+  try {
+    const queries = category === 'food' ? ['restaurant', 'cafe'] : ['tourist attraction', 'museum', 'park'];
+    const results = (await Promise.all(queries.map(query => searchPlaces(query, lat, lng))))
+      .flat()
+      .filter(place => Number.isFinite(place.lat) && Number.isFinite(place.lng))
+      .map(place => ({
+        ...place,
+        distanceKm: Number(calculateHaversineDistance(lat, lng, place.lat, place.lng).toFixed(1))
+      }))
+      .filter(place => place.distanceKm <= 50)
+      .filter((place, index, places) => places.findIndex(other => other.name === place.name) === index)
+      .sort((a, b) => a.distanceKm - b.distanceKm)
+      .slice(0, 12);
+    res.json(results);
+  } catch (err) {
+    res.status(502).json({ error: 'Nearby places are temporarily unavailable' });
   }
 });
 

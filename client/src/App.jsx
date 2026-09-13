@@ -6,6 +6,7 @@ import DriverView from './components/Driver/DriverView';
 import AdminView from './components/Admin/AdminView';
 import WalletModal from './components/WalletModal';
 import HistoryModal from './components/HistoryModal';
+import ProfileModal from './components/ProfileModal';
 import LoginView from './components/LoginView';
 import { socket, registerUser } from './services/socket';
 import { fetchDrivers, fetchActiveRide } from './services/api';
@@ -60,6 +61,7 @@ function RoleApp({ role }) {
   // Modals
   const [showWalletModal, setShowWalletModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [showProfileModal, setShowProfileModal] = useState(false);
 
   // Load shared fleet data after the user signs in.
   useEffect(() => {
@@ -174,6 +176,7 @@ function RoleApp({ role }) {
         walletBalance={currentUser?.walletBalance}
         onOpenWallet={() => setShowWalletModal(true)}
         onOpenHistory={() => setShowHistoryModal(true)}
+        onOpenProfile={() => setShowProfileModal(true)}
         isConnected={isConnected}
       />
 
@@ -246,6 +249,17 @@ function RoleApp({ role }) {
         <HistoryModal
           user={currentUser}
           onClose={() => setShowHistoryModal(false)}
+        />
+      )}
+
+      {showProfileModal && (
+        <ProfileModal
+          user={currentUser}
+          onClose={() => setShowProfileModal(false)}
+          onProfileUpdate={(updated) => {
+            setCurrentUser(updated);
+            setAuthenticatedUser(updated);
+          }}
         />
       )}
     </div>

@@ -4,7 +4,7 @@ import { loginUser, loginWithFirebaseToken } from '../services/api';
 import { firebaseEnabled, getFirebaseToken, sendFirebasePasswordReset, signInWithFirebase, signInWithGoogle, signUpWithFirebase } from '../services/firebaseAuth';
 
 const ROLE_COPY = {
-  RIDER: { label: 'Rider', icon: Car, accent: 'bg-uber-accent', hint: 'Book a ride around your city.' },
+  RIDER: { label: 'User', icon: Car, accent: 'bg-uber-accent', hint: 'Book a ride around your city.' },
   DRIVER: { label: 'Driver', icon: Radio, accent: 'bg-uber-green', hint: 'Manage trips, status, and earnings.' },
   ADMIN: { label: 'Admin', icon: ShieldCheck, accent: 'bg-purple-600', hint: 'Monitor dispatch and platform health.' }
 };
