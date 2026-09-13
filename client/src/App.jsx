@@ -14,7 +14,7 @@ function getRoleFromPath() {
   const path = window.location.pathname.toLowerCase();
   if (path === '/driver') return 'DRIVER';
   if (path === '/admin') return 'ADMIN';
-  if (path === '/rider') return 'RIDER';
+  if (path === '/user' || path === '/rider') return 'RIDER';
   return null;
 }
 
@@ -27,7 +27,7 @@ function RoleLauncher() {
         <p className="text-gray-400 mb-8">Each role has its own dedicated application.</p>
         <div className="grid gap-4 md:grid-cols-3">
           {[
-            { role: 'rider', label: 'Rider', description: 'Book and track rides', color: 'bg-uber-accent' },
+            { role: 'user', label: 'User', description: 'Book and track rides', color: 'bg-uber-accent' },
             { role: 'driver', label: 'Driver', description: 'Manage trips and earnings', color: 'bg-uber-green' },
             { role: 'admin', label: 'Admin', description: 'Monitor the entire fleet', color: 'bg-purple-600' }
           ].map((item) => (

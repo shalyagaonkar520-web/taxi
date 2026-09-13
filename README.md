@@ -71,7 +71,7 @@ npm run dev
 ```
 
 - **Role workspaces**:
-  - Rider: [http://localhost:5173/rider](http://localhost:5173/rider)
+  - User: [http://localhost:5173/user](http://localhost:5173/user)
   - Driver: [http://localhost:5173/driver](http://localhost:5173/driver)
   - Admin: [http://localhost:5173/admin](http://localhost:5173/admin)
 - **Workspace launcher**: [http://localhost:5173](http://localhost:5173)
