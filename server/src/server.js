@@ -15,6 +15,8 @@ const app = express();
 const server = http.createServer(app);
 
 const PORT = process.env.PORT || 5000;
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@nexride.com';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 
 const allowedOrigins = (process.env.CORS_ORIGIN || '*')
   .split(',')
@@ -49,6 +51,28 @@ app.get('/api/health', (req, res) => {
     driversOnline: db.getDrivers().filter(d => d.status === 'ONLINE').length,
     activeRides: db.getRides().filter(r => ['REQUESTED', 'ACCEPTED', 'ARRIVED', 'IN_PROGRESS'].includes(r.status)).length
   });
+});
+
+// Login for one role at a time. Admin credentials are environment-only.
+app.post('/api/auth/login', (req, res) => {
+  const { email, password, role } = req.body || {};
+  const normalizedRole = String(role || '').toUpperCase();
+
+  if (!email || !password || !['RIDER', 'DRIVER', 'ADMIN'].includes(normalizedRole)) {
+    return res.status(400).json({ error: 'Email, password, and role are required' });
+  }
+
+  let user = null;
+  if (normalizedRole === 'ADMIN') {
+    if (ADMIN_PASSWORD && email.toLowerCase() === ADMIN_EMAIL.toLowerCase() && password === ADMIN_PASSWORD) {
+      user = db.sanitizeUser(db.getUserById('admin-01'));
+    }
+  } else {
+    user = db.authenticateUser(email, password, normalizedRole);
+  }
+
+  if (!user) return res.status(401).json({ error: 'Invalid credentials for this workspace' });
+  res.json({ user: { ...user, role: normalizedRole } });
 });
 
 // Users & Demo accounts

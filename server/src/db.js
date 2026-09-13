@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
@@ -201,6 +202,52 @@ const INITIAL_DATA = {
 class Database {
   constructor() {
     this.data = this.loadData();
+    this.ensureUserCredentials();
+  }
+
+  hashPassword(password) {
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+    return `${salt}:${hash}`;
+  }
+
+  verifyPassword(password, storedHash) {
+    if (!storedHash || !storedHash.includes(':')) return false;
+    const [salt, key] = storedHash.split(':');
+    const derivedKey = crypto.scryptSync(password, salt, 64);
+    const storedKey = Buffer.from(key, 'hex');
+    return storedKey.length === derivedKey.length && crypto.timingSafeEqual(storedKey, derivedKey);
+  }
+
+  sanitizeUser(user) {
+    if (!user) return null;
+    const { passwordHash, ...safeUser } = user;
+    return safeUser;
+  }
+
+  ensureUserCredentials() {
+    let changed = false;
+    this.data.users.forEach((user) => {
+      if (user.role === 'RIDER' && !user.passwordHash) {
+        user.passwordHash = this.hashPassword('rider123');
+        changed = true;
+      }
+      if (user.role === 'DRIVER' && !user.passwordHash) {
+        user.passwordHash = this.hashPassword('driver123');
+        changed = true;
+      }
+    });
+    if (changed) this.saveData();
+  }
+
+  authenticateUser(email, password, role) {
+    const user = this.data.users.find((candidate) =>
+      candidate.email.toLowerCase() === String(email).toLowerCase() &&
+      candidate.role === role &&
+      this.verifyPassword(password, candidate.passwordHash)
+    );
+    if (!user) return null;
+    return this.sanitizeUser(user);
   }
 
   loadData() {
@@ -234,7 +281,7 @@ class Database {
 
   // Users & Drivers
   getUsers() {
-    return this.data.users;
+    return this.data.users.map(user => this.sanitizeUser(user));
   }
 
   getUserById(id) {
@@ -242,7 +289,9 @@ class Database {
   }
 
   getDrivers() {
-    return this.data.users.filter(u => u.role === 'DRIVER');
+    return this.data.users
+      .filter(u => u.role === 'DRIVER')
+      .map(user => this.sanitizeUser(user));
   }
 
   getDriverById(id) {

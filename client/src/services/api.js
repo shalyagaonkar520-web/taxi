@@ -16,6 +16,15 @@ async function request(path, options) {
   return payload;
 }
 
+export async function loginUser(email, password, role) {
+  const result = await request('/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password, role })
+  });
+  return result.user;
+}
+
 export async function fetchUsers() {
   return request('/users');
 }

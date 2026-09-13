@@ -6,8 +6,9 @@ import DriverView from './components/Driver/DriverView';
 import AdminView from './components/Admin/AdminView';
 import WalletModal from './components/WalletModal';
 import HistoryModal from './components/HistoryModal';
+import LoginView from './components/LoginView';
 import { socket, registerUser } from './services/socket';
-import { fetchUsers, fetchDrivers, fetchActiveRide } from './services/api';
+import { fetchDrivers, fetchActiveRide } from './services/api';
 
 function getRoleFromPath() {
   const path = window.location.pathname.toLowerCase();
@@ -46,6 +47,7 @@ function RoleLauncher() {
 }
 
 function RoleApp({ role }) {
+  const [authenticatedUser, setAuthenticatedUser] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
   const [drivers, setDrivers] = useState([]);
   const [activeRide, setActiveRide] = useState(null);
@@ -59,29 +61,25 @@ function RoleApp({ role }) {
   const [showWalletModal, setShowWalletModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
 
-  // Initial Load
+  // Load shared fleet data after the user signs in.
   useEffect(() => {
     async function initData() {
       try {
-        const [allUsers, allDrivers] = await Promise.all([
-          fetchUsers(),
-          fetchDrivers()
-        ]);
+        const allDrivers = await fetchDrivers();
         setDrivers(allDrivers);
 
-        const initialUser = allUsers.find(u => u.role === role) || allUsers[0];
-        setCurrentUser(initialUser);
-        registerUser(initialUser.id, role);
+        setCurrentUser(authenticatedUser);
+        registerUser(authenticatedUser.id, role);
 
         // Check active ride
-        const active = await fetchActiveRide(initialUser.id);
+        const active = await fetchActiveRide(authenticatedUser.id);
         if (active) setActiveRide(active);
       } catch (err) {
         console.error('Failed to load initial data:', err);
       }
     }
     initData();
-  }, [role]);
+  }, [role, authenticatedUser]);
 
   // Handle Socket Connection & Real-Time Sync
   useEffect(() => {
@@ -162,6 +160,10 @@ function RoleApp({ role }) {
   const mapDestination = activeRide?.destination || previewDestination;
   const mapRoute = activeRide?.routeCoordinates || previewRoute;
   const driverRoute = activeRide?.driverRouteCoordinates || [];
+
+  if (!authenticatedUser) {
+    return <LoginView role={role} onLogin={setAuthenticatedUser} />;
+  }
 
   return (
     <div className="relative w-screen h-screen flex flex-col overflow-hidden bg-[#09090b]">
