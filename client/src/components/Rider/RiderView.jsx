@@ -263,7 +263,7 @@ export default function RiderView({
     } else {
       setDestQuery(query);
       if (query.length > 1) {
-        const results = await searchPlaces(query, destination?.lat, destination?.lng);
+        const results = await searchPlaces(query, pickup?.lat, pickup?.lng);
         setDestSuggestions(results);
       } else {
         setDestSuggestions([]);
