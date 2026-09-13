@@ -541,7 +541,7 @@ export default function RiderView({
                   ))}
                 </div>
                 <div className="mt-3 grid gap-2 max-h-48 overflow-y-auto">
-                  {loadingPlaces ? <p className="text-xs text-gray-500 py-3">Finding nearby recommendations...</p> : nearbyPlaces.length === 0 ? <p className="text-xs text-gray-500 py-3">Use Current Location to discover nearby places.</p> : nearbyPlaces.map((place) => (
+                  {loadingPlaces ? <p className="text-xs text-gray-500 py-3">Finding nearby recommendations...</p> : nearbyPlaces.length === 0 ? <p className="text-xs text-gray-500 py-3">No nearby places found yet. Try Places or Food.</p> : nearbyPlaces.map((place) => (
                     <button key={`${place.name}-${place.lat}`} type="button" onClick={() => selectPlace(place, 'dest')} className="text-left rounded-xl border border-white/5 bg-black/20 px-3 py-2 hover:border-uber-accent/40">
                       <div className="flex items-center justify-between gap-2"><span className="text-xs font-bold text-white truncate">{place.name}</span><span className="text-[10px] text-uber-accent whitespace-nowrap">{place.distanceKm} km</span></div>
                       <p className="text-[10px] text-gray-500 truncate mt-0.5">{place.address}</p>

@@ -51,6 +51,15 @@ export async function updateUserProfile(userId, profile) {
   return result.user;
 }
 
+export async function changeUserPassword(userId, currentPassword, newPassword) {
+  const result = await request(`/users/${userId}/password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ currentPassword, newPassword })
+  });
+  return result.user;
+}
+
 export async function fetchNearbyPlaces(lat, lng, category = 'tourism') {
   return request(`/places/nearby?lat=${lat}&lng=${lng}&category=${encodeURIComponent(category)}`);
 }

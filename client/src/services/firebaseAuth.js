@@ -5,7 +5,8 @@ import {
   GoogleAuthProvider,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
-  signInWithPopup
+  signInWithPopup,
+  updatePassword
 } from 'firebase/auth';
 
 const firebaseConfig = {
@@ -35,6 +36,11 @@ export async function signInWithGoogle() {
 
 export async function sendFirebasePasswordReset(email) {
   return sendPasswordResetEmail(firebaseAuth, email);
+}
+
+export async function changeFirebasePassword(newPassword) {
+  if (!firebaseAuth?.currentUser) throw new Error('No Firebase account is currently signed in');
+  return updatePassword(firebaseAuth.currentUser, newPassword);
 }
 
 export async function getFirebaseToken(user) {

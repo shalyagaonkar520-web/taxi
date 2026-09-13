@@ -281,6 +281,14 @@ class Database {
     return this.sanitizeUser(user);
   }
 
+  changePassword(id, currentPassword, newPassword) {
+    const user = this.getUserById(id);
+    if (!user || !this.verifyPassword(currentPassword, user.passwordHash)) return null;
+    user.passwordHash = this.hashPassword(newPassword);
+    this.saveData();
+    return this.sanitizeUser(user);
+  }
+
   upsertFirebaseUser(firebaseUser, role) {
     let user = this.data.users.find(candidate =>
       candidate.firebaseUid === firebaseUser.uid ||

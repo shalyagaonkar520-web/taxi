@@ -152,6 +152,16 @@ app.patch('/api/users/:id', (req, res) => {
   res.json({ user: db.sanitizeUser(user) });
 });
 
+app.post('/api/users/:id/password', (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  if (!currentPassword || !newPassword || newPassword.length < 8) {
+    return res.status(400).json({ error: 'Current password and a new password of at least 8 characters are required' });
+  }
+  const user = db.changePassword(req.params.id, currentPassword, newPassword);
+  if (!user) return res.status(401).json({ error: 'Current password is incorrect or this account uses Firebase' });
+  res.json({ user });
+});
+
 // Drivers list
 app.get('/api/drivers', (req, res) => {
   res.json(db.getDrivers());
@@ -206,7 +216,9 @@ app.get('/api/places/nearby', async (req, res) => {
     return res.status(400).json({ error: 'Valid lat and lng are required' });
   }
   try {
-    const queries = category === 'food' ? ['restaurant', 'cafe'] : ['tourist attraction', 'museum', 'park'];
+    const queries = category === 'food'
+      ? ['restaurant', 'cafe', 'food court']
+      : ['park', 'museum', 'mall', 'airport', 'train station', 'tourist attraction'];
     const results = (await Promise.all(queries.map(query => searchPlaces(query, lat, lng))))
       .flat()
       .filter(place => Number.isFinite(place.lat) && Number.isFinite(place.lng))
