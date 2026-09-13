@@ -166,7 +166,7 @@ function RoleApp({ role }) {
   }
 
   return (
-    <div className="relative w-screen h-screen flex flex-col overflow-hidden bg-[#09090b]">
+    <div className={`relative w-screen min-h-screen flex flex-col bg-[#09090b] ${role === 'ADMIN' ? 'overflow-y-auto' : 'h-screen overflow-hidden'}`}>
       {/* Top Navbar */}
       <Navbar
         currentRole={role}
@@ -178,10 +178,10 @@ function RoleApp({ role }) {
       />
 
       {/* Main Content Area */}
-      <div className="relative flex-1 w-full h-full flex flex-col md:flex-row overflow-hidden">
+      <div className={`relative flex-1 w-full flex flex-col md:flex-row ${role === 'ADMIN' ? 'overflow-visible' : 'h-full overflow-hidden'}`}>
         
         {/* Left Floating Interactive Panel */}
-        <div className="z-30 w-full md:w-auto md:max-w-md p-4 lg:p-6 overflow-y-auto pointer-events-auto flex flex-col justify-start">
+        <div className={`z-30 w-full ${role === 'ADMIN' ? 'max-w-7xl mx-auto p-4 lg:p-8' : 'md:w-auto md:max-w-md p-4 lg:p-6 overflow-y-auto'} pointer-events-auto flex flex-col justify-start`}>
           {role === 'RIDER' && (
             <RiderView
               user={currentUser}
@@ -213,19 +213,20 @@ function RoleApp({ role }) {
           )}
         </div>
 
-        {/* Live Background Interactive Map */}
-        <div className="absolute inset-0 z-0">
-          <LiveMap
-            center={mapCenter}
-            zoom={14}
-            drivers={drivers}
-            pickup={mapPickup}
-            destination={mapDestination}
-            routeCoordinates={mapRoute}
-            driverRouteCoordinates={driverRoute}
-            assignedDriverId={activeRide?.driverId}
-          />
-        </div>
+        {role !== 'ADMIN' && (
+          <div className="absolute inset-0 z-0">
+            <LiveMap
+              center={mapCenter}
+              zoom={14}
+              drivers={drivers}
+              pickup={mapPickup}
+              destination={mapDestination}
+              routeCoordinates={mapRoute}
+              driverRouteCoordinates={driverRoute}
+              assignedDriverId={activeRide?.driverId}
+            />
+          </div>
+        )}
 
       </div>
 
