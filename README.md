@@ -39,7 +39,7 @@ A full-stack, real-time ride-hailing application built with **React 18**, **Node
 |---|---|
 | **Frontend** | React 18, Vite, Tailwind CSS, Lucide Icons, Leaflet, Canvas Confetti |
 | **Backend** | Node.js, Express.js, Socket.IO, CORS, Dotenv, UUID |
-| **Database** | Persistent JSON / SQLite Storage with atomic ACID file writes |
+| **Database** | PostgreSQL 16 with JSONB state persistence |
 | **Routing & Geocoding** | Open Source Routing Machine (OSRM) + Nominatim Open APIs (zero paid API keys required) |
 | **Audio** | Native Web Audio API Synthesizer (zero external audio asset dependencies) |
 
@@ -93,10 +93,19 @@ cp server/.env.example server/.env
 - `VITE_SOCKET_URL`: backend origin, for example `https://api.example.com`.
 - `CORS_ORIGIN`: comma-separated frontend origins, for example
   `https://app.example.com`.
+- `DATABASE_URL`: PostgreSQL connection string. The local Docker example uses
+  `postgresql://postgres:password123@localhost:5434/nexride_dev`.
 
 Before publishing, confirm the backend responds at `/api/health`, the frontend
 can reach the configured API URL, and the Socket.IO connection is established.
 Do not commit `.env` files or production secrets.
+
+### Database Migration
+
+The server creates the `nexride_state` table on startup. On an empty database,
+it imports the existing `server/data/db.json` seed state; subsequent writes are
+persisted to PostgreSQL. The JSON file remains as a local recovery fallback when
+`DATABASE_URL` is not configured.
 
 ---
 
