@@ -3,7 +3,8 @@ const http = require('http');
 const cors = require('cors');
 const { Server } = require('socket.io');
 const dotenv = require('dotenv');
-const admin = require('firebase-admin');
+const { initializeApp, cert } = require('firebase-admin/app');
+const { getAuth } = require('firebase-admin/auth');
 
 dotenv.config();
 
@@ -23,10 +24,18 @@ let firebaseAuth = null;
 if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
   try {
     const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
-    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-    firebaseAuth = admin.auth();
+    initializeApp({ credential: cert(serviceAccount) });
+    firebaseAuth = getAuth();
   } catch (err) {
     console.error('Firebase Admin configuration is invalid:', err.message);
+  }
+} else if (process.env.FIREBASE_PROJECT_ID) {
+  try {
+    // ID-token verification uses Firebase's public signing keys; no private service account is needed.
+    initializeApp({ projectId: process.env.FIREBASE_PROJECT_ID });
+    firebaseAuth = getAuth();
+  } catch (err) {
+    console.error('Firebase project configuration is invalid:', err.message);
   }
 }
 
