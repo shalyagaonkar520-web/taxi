@@ -39,8 +39,6 @@ const io = new Server(server, {
   }
 });
 
-setupSocketIO(io);
-
 // ---------------- REST API ROUTES ----------------
 
 // Health check
@@ -249,7 +247,16 @@ app.post('/api/admin/settings', (req, res) => {
   res.json(updated);
 });
 
-server.listen(PORT, () => {
-  console.log(`NexRide Server running on port ${PORT}`);
-  console.log(`📡 WebSocket ready on port ${PORT}`);
+async function startServer() {
+  await db.initialize();
+  setupSocketIO(io);
+  server.listen(PORT, () => {
+    console.log(`NexRide Server running on port ${PORT}`);
+    console.log(`WebSocket ready on port ${PORT}`);
+  });
+}
+
+startServer().catch((err) => {
+  console.error('Failed to initialize NexRide:', err);
+  process.exit(1);
 });

@@ -2,9 +2,11 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
+const { Pool } = require('pg');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
+const DATABASE_URL = process.env.DATABASE_URL;
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -202,6 +204,35 @@ const INITIAL_DATA = {
 class Database {
   constructor() {
     this.data = this.loadData();
+    this.pool = DATABASE_URL ? new Pool({ connectionString: DATABASE_URL }) : null;
+    this.pendingWrite = Promise.resolve();
+    this.ensureUserCredentials();
+  }
+
+  async initialize() {
+    if (!this.pool) {
+      console.warn('DATABASE_URL is not configured; using local JSON storage.');
+      return;
+    }
+
+    await this.pool.query(`
+      CREATE TABLE IF NOT EXISTS nexride_state (
+        id SMALLINT PRIMARY KEY CHECK (id = 1),
+        data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    const result = await this.pool.query('SELECT data FROM nexride_state WHERE id = 1');
+    if (result.rows.length === 0) {
+      await this.pool.query(
+        'INSERT INTO nexride_state (id, data) VALUES (1, $1::jsonb)',
+        [JSON.stringify(this.data)]
+      );
+      return;
+    }
+
+    this.data = result.rows[0].data;
     this.ensureUserCredentials();
   }
 
@@ -266,7 +297,18 @@ class Database {
   saveData(data) {
     try {
       const tempPath = `${DB_FILE}.tmp`;
-      fs.writeFileSync(tempPath, JSON.stringify(data || this.data, null, 2), 'utf8');
+      const nextData = data || this.data;
+      if (this.pool) {
+        this.pendingWrite = this.pendingWrite
+          .then(() => this.pool.query(
+            'INSERT INTO nexride_state (id, data, updated_at) VALUES (1, $1::jsonb, NOW()) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()',
+            [JSON.stringify(nextData)]
+          ))
+          .catch((err) => console.error('Failed to write PostgreSQL state:', err.message));
+        return;
+      }
+
+      fs.writeFileSync(tempPath, JSON.stringify(nextData, null, 2), 'utf8');
       try {
         fs.renameSync(tempPath, DB_FILE);
       } catch (err) {
