@@ -220,7 +220,13 @@ class Database {
     try {
       const tempPath = `${DB_FILE}.tmp`;
       fs.writeFileSync(tempPath, JSON.stringify(data || this.data, null, 2), 'utf8');
-      fs.renameSync(tempPath, DB_FILE);
+      try {
+        fs.renameSync(tempPath, DB_FILE);
+      } catch (err) {
+        if (err.code !== 'EPERM' && err.code !== 'EEXIST') throw err;
+        fs.copyFileSync(tempPath, DB_FILE);
+        fs.rmSync(tempPath, { force: true });
+      }
     } catch (err) {
       console.error('Failed to write db.json:', err.message);
     }

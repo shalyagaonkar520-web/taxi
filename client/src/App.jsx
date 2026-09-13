@@ -9,9 +9,43 @@ import HistoryModal from './components/HistoryModal';
 import { socket, registerUser } from './services/socket';
 import { fetchUsers, fetchDrivers, fetchActiveRide } from './services/api';
 
-export default function App() {
-  const [role, setRole] = useState('RIDER'); // 'RIDER' | 'DRIVER' | 'ADMIN'
-  const [users, setUsers] = useState([]);
+function getRoleFromPath() {
+  const path = window.location.pathname.toLowerCase();
+  if (path === '/driver') return 'DRIVER';
+  if (path === '/admin') return 'ADMIN';
+  if (path === '/rider') return 'RIDER';
+  return null;
+}
+
+function RoleLauncher() {
+  return (
+    <main className="min-h-screen bg-[#09090b] text-white flex items-center justify-center p-6">
+      <div className="w-full max-w-3xl">
+        <p className="text-xs uppercase tracking-[0.25em] text-gray-500 mb-3">NexRide platform</p>
+        <h1 className="text-4xl font-black tracking-tight mb-3">Choose your workspace</h1>
+        <p className="text-gray-400 mb-8">Each role has its own dedicated application.</p>
+        <div className="grid gap-4 md:grid-cols-3">
+          {[
+            { role: 'rider', label: 'Rider', description: 'Book and track rides', color: 'bg-uber-accent' },
+            { role: 'driver', label: 'Driver', description: 'Manage trips and earnings', color: 'bg-uber-green' },
+            { role: 'admin', label: 'Admin', description: 'Monitor the entire fleet', color: 'bg-purple-600' }
+          ].map((item) => (
+            <a
+              key={item.role}
+              href={`/${item.role}`}
+              className={`${item.color} rounded-2xl p-5 min-h-36 flex flex-col justify-end hover:brightness-110 transition-all`}
+            >
+              <span className="text-xl font-bold">{item.label}</span>
+              <span className="text-sm text-white/75 mt-1">{item.description}</span>
+            </a>
+          ))}
+        </div>
+      </div>
+    </main>
+  );
+}
+
+function RoleApp({ role }) {
   const [currentUser, setCurrentUser] = useState(null);
   const [drivers, setDrivers] = useState([]);
   const [activeRide, setActiveRide] = useState(null);
@@ -33,22 +67,21 @@ export default function App() {
           fetchUsers(),
           fetchDrivers()
         ]);
-        setUsers(allUsers);
         setDrivers(allDrivers);
 
-        const initialRider = allUsers.find(u => u.role === 'RIDER') || allUsers[0];
-        setCurrentUser(initialRider);
-        registerUser(initialRider.id, 'RIDER');
+        const initialUser = allUsers.find(u => u.role === role) || allUsers[0];
+        setCurrentUser(initialUser);
+        registerUser(initialUser.id, role);
 
         // Check active ride
-        const active = await fetchActiveRide(initialRider.id);
+        const active = await fetchActiveRide(initialUser.id);
         if (active) setActiveRide(active);
       } catch (err) {
         console.error('Failed to load initial data:', err);
       }
     }
     initData();
-  }, []);
+  }, [role]);
 
   // Handle Socket Connection & Real-Time Sync
   useEffect(() => {
@@ -62,6 +95,7 @@ export default function App() {
 
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
+    setIsConnected(socket.connected);
 
     // Initial state snapshot from socket server
     socket.on('init:state', (data) => {
@@ -95,24 +129,6 @@ export default function App() {
       socket.off('driver:status_changed');
     };
   }, [currentUser, role]);
-
-  // Switch Role
-  const handleRoleChange = (newRole) => {
-    setRole(newRole);
-    let targetUser = null;
-    if (newRole === 'RIDER') {
-      targetUser = users.find(u => u.role === 'RIDER') || users[0];
-    } else if (newRole === 'DRIVER') {
-      targetUser = users.find(u => u.role === 'DRIVER') || drivers[0];
-    } else if (newRole === 'ADMIN') {
-      targetUser = users.find(u => u.role === 'ADMIN') || users.find(u => u.id === 'admin-01');
-    }
-
-    if (targetUser) {
-      setCurrentUser(targetUser);
-      registerUser(targetUser.id, newRole);
-    }
-  };
 
   // Handle Rider preview or trip updates
   const handleRiderUpdate = (data) => {
@@ -152,7 +168,6 @@ export default function App() {
       {/* Top Navbar */}
       <Navbar
         currentRole={role}
-        onRoleChange={handleRoleChange}
         user={currentUser}
         walletBalance={currentUser?.walletBalance}
         onOpenWallet={() => setShowWalletModal(true)}
@@ -232,4 +247,9 @@ export default function App() {
       )}
     </div>
   );
+}
+
+export default function App() {
+  const role = getRoleFromPath();
+  return role ? <RoleApp role={role} /> : <RoleLauncher />;
 }

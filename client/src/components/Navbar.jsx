@@ -1,11 +1,9 @@
 import React, { useState } from 'react';
 import { 
   Car, 
-  ShieldCheck, 
   Wallet, 
   Star, 
   Plus, 
-  Radio, 
   User, 
   ChevronDown, 
   Clock, 
@@ -16,7 +14,6 @@ import {
 
 export default function Navbar({ 
   currentRole, 
-  onRoleChange, 
   user, 
   walletBalance, 
   onOpenWallet,
@@ -47,43 +44,8 @@ export default function Navbar({
           </div>
         </div>
 
-        {/* Role Switcher Pill */}
-        <div className="flex items-center bg-black/40 p-1 rounded-2xl border border-white/10 shadow-inner">
-          <button
-            onClick={() => onRoleChange('RIDER')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
-              currentRole === 'RIDER'
-                ? 'bg-uber-accent text-white shadow-md shadow-uber-accent/30 scale-[1.02]'
-                : 'text-gray-400 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <Car className="w-3.5 h-3.5" />
-            <span>Rider</span>
-          </button>
-
-          <button
-            onClick={() => onRoleChange('DRIVER')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
-              currentRole === 'DRIVER'
-                ? 'bg-uber-green text-white shadow-md shadow-uber-green/30 scale-[1.02]'
-                : 'text-gray-400 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <Radio className="w-3.5 h-3.5" />
-            <span>Driver</span>
-          </button>
-
-          <button
-            onClick={() => onRoleChange('ADMIN')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
-              currentRole === 'ADMIN'
-                ? 'bg-purple-600 text-white shadow-md shadow-purple-600/30 scale-[1.02]'
-                : 'text-gray-400 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <ShieldCheck className="w-3.5 h-3.5" />
-            <span>Admin</span>
-          </button>
+        <div className="hidden sm:flex items-center px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 text-xs font-semibold text-gray-300">
+          {currentRole === 'RIDER' ? 'Rider workspace' : currentRole === 'DRIVER' ? 'Driver workspace' : 'Admin workspace'}
         </div>
 
         {/* Right Section: Connection, Wallet & Profile */}
