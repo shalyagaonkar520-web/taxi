@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Camera, Check, Eye, EyeOff, KeyRound, UserRound, X } from 'lucide-react';
+import { Camera, Check, Eye, KeyRound, UserRound, X } from 'lucide-react';
 import { changeUserPassword, updateUserProfile } from '../services/api';
 import { changeFirebasePassword, firebaseEnabled } from '../services/firebaseAuth';
 
@@ -7,6 +7,7 @@ export default function ProfileModal({ user, onClose, onProfileUpdate }) {
   const [profile, setProfile] = useState({ name: '', email: '', phone: '', avatar: '' });
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState('');
+  const [section, setSection] = useState('profile');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -40,8 +41,11 @@ export default function ProfileModal({ user, onClose, onProfileUpdate }) {
     setSaving(true);
     setStatus('');
     try {
-      const updated = await updateUserProfile(user.id, profile);
-      if (newPassword || currentPassword || confirmPassword) {
+      let updated = user;
+      if (section === 'security') {
+        if (!currentPassword || !newPassword || newPassword.length < 8) {
+          throw new Error('Enter your current password and a new password of at least 8 characters');
+        }
         if (newPassword !== confirmPassword) throw new Error('New passwords do not match');
         if (firebaseEnabled) {
           try {
@@ -53,6 +57,8 @@ export default function ProfileModal({ user, onClose, onProfileUpdate }) {
         } else {
           await changeUserPassword(user.id, currentPassword, newPassword);
         }
+      } else {
+        updated = await updateUserProfile(user.id, profile);
       }
       onProfileUpdate(updated);
       setStatus('Profile saved');
@@ -68,7 +74,7 @@ export default function ProfileModal({ user, onClose, onProfileUpdate }) {
 
   return (
     <div className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-      <form onSubmit={handleSubmit} className="glass-card w-full max-w-md rounded-3xl border border-white/15 p-6 shadow-2xl">
+      <form onSubmit={handleSubmit} className="glass-card w-full max-w-md max-h-[calc(100vh-2rem)] overflow-y-auto rounded-3xl border border-white/15 p-5 sm:p-6 shadow-2xl">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-uber-accent/20 text-uber-accent flex items-center justify-center"><UserRound className="w-5 h-5" /></div>
@@ -80,6 +86,18 @@ export default function ProfileModal({ user, onClose, onProfileUpdate }) {
           <button type="button" onClick={onClose} aria-label="Close profile" className="text-gray-400 hover:text-white"><X className="w-5 h-5" /></button>
         </div>
 
+        <div className="flex gap-2 mb-5 rounded-xl bg-black/25 p-1">
+          {[
+            ['profile', 'Profile', UserRound],
+            ['security', 'Password', KeyRound]
+          ].map(([value, label, Icon]) => (
+            <button key={value} type="button" onClick={() => setSection(value)} className={`flex-1 flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-bold transition ${section === value ? 'bg-uber-accent text-white' : 'text-gray-400 hover:bg-white/5 hover:text-white'}`}>
+              <Icon className="w-3.5 h-3.5" /> {label}
+            </button>
+          ))}
+        </div>
+
+        {section === 'profile' && <>
         <div className="flex items-center gap-4 mb-5">
           <div className="relative">
             {profile.avatar ? <img src={profile.avatar} alt="Profile" className="w-16 h-16 rounded-2xl object-cover ring-2 ring-white/10" /> : <div className="w-16 h-16 rounded-2xl bg-white/10 flex items-center justify-center"><UserRound className="w-7 h-7 text-gray-400" /></div>}
@@ -99,8 +117,9 @@ export default function ProfileModal({ user, onClose, onProfileUpdate }) {
             </label>
           ))}
         </div>
+        </>}
 
-        <div className="mt-5 border-t border-white/10 pt-5">
+        {section === 'security' && <div className="border-t border-white/10 pt-4">
           <div className="flex items-center justify-between mb-3">
             <div><p className="text-sm font-bold text-white">Change password</p><p className="text-[11px] text-gray-500">Use at least 8 characters.</p></div>
             <KeyRound className="w-4 h-4 text-gray-500" />
@@ -112,9 +131,10 @@ export default function ProfileModal({ user, onClose, onProfileUpdate }) {
           ))}
           <button type="button" onClick={() => setShowPasswords((visible) => !visible)} className="text-[11px] text-gray-400 hover:text-white flex items-center gap-1"><Eye className="w-3 h-3" /> {showPasswords ? 'Hide passwords' : 'Show passwords'}</button>
         </div>
+        }
 
         {status && <p className="mt-4 text-xs text-gray-300 flex items-center gap-1"><Check className="w-3.5 h-3.5 text-uber-green" /> {status}</p>}
-        <button type="submit" disabled={saving} className="mt-5 w-full rounded-xl bg-uber-accent px-4 py-3 font-bold text-white disabled:opacity-60">{saving ? 'Saving...' : 'Save profile'}</button>
+        <button type="submit" disabled={saving} className="mt-5 w-full rounded-xl bg-uber-accent px-4 py-3 font-bold text-white disabled:opacity-60">{saving ? 'Saving...' : section === 'security' ? 'Update password' : 'Save profile'}</button>
       </form>
     </div>
   );
