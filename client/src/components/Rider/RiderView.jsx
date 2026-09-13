@@ -53,6 +53,8 @@ export default function RiderView({
   const [locating, setLocating] = useState(false);
   const destInputRef = useRef(null);
 
+    const quickDestinations = ['Airport', 'Mall', 'Station'];
+
   // Auto-detect location on initial load if possible
   useEffect(() => {
     if (navigator.geolocation && !pickupQuery) {
@@ -485,6 +487,25 @@ export default function RiderView({
                 </div>
               )}
             </div>
+          </div>
+
+          <div className="flex items-center gap-2 overflow-x-auto pb-1">
+            <span className="text-[11px] font-semibold text-gray-500 whitespace-nowrap">Popular:</span>
+            {quickDestinations.map((place) => (
+              <button
+                key={place}
+                type="button"
+                onClick={() => {
+                  setActiveInput('dest');
+                  setDestQuery(place);
+                  handleSearch(place, 'dest');
+                  destInputRef.current?.focus();
+                }}
+                className="whitespace-nowrap rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] font-semibold text-gray-300 transition hover:border-uber-accent/50 hover:bg-uber-accent/10 hover:text-white"
+              >
+                {place}
+              </button>
+            ))}
           </div>
 
           {/* Vehicle Tier Picker (Only when destination is selected) */}
