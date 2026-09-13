@@ -77,6 +77,27 @@ npm run dev
 - **Workspace launcher**: [http://localhost:5173](http://localhost:5173)
 - **Backend API & WebSocket Server**: [http://localhost:5000](http://localhost:5000)
 
+### Production Configuration
+
+The frontend uses same-origin `/api` and Socket.IO paths by default, which works
+when a reverse proxy serves the client and forwards those paths to the server.
+For separate deployments, copy the example files and set:
+
+```bash
+cp client/.env.example client/.env.production
+cp server/.env.example server/.env
+```
+
+- `VITE_API_URL`: backend URL including `/api`, for example
+  `https://api.example.com/api`.
+- `VITE_SOCKET_URL`: backend origin, for example `https://api.example.com`.
+- `CORS_ORIGIN`: comma-separated frontend origins, for example
+  `https://app.example.com`.
+
+Before publishing, confirm the backend responds at `/api/health`, the frontend
+can reach the configured API URL, and the Socket.IO connection is established.
+Do not commit `.env` files or production secrets.
+
 ---
 
 ## 📡 REST API & WebSocket Events

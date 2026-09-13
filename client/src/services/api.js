@@ -1,13 +1,27 @@
-const API_BASE = window.location.port === '5173' ? 'http://localhost:5000/api' : '/api';
+const configuredApiUrl = import.meta.env.VITE_API_URL?.trim();
+const API_BASE = (configuredApiUrl || '/api').replace(/\/$/, '');
+
+async function request(path, options) {
+  const response = await fetch(`${API_BASE}${path}`, options);
+  const contentType = response.headers.get('content-type') || '';
+  const payload = contentType.includes('application/json')
+    ? await response.json()
+    : await response.text();
+
+  if (!response.ok) {
+    const message = typeof payload === 'object' ? payload.error : payload;
+    throw new Error(message || `Request failed with status ${response.status}`);
+  }
+
+  return payload;
+}
 
 export async function fetchUsers() {
-  const res = await fetch(`${API_BASE}/users`);
-  return res.json();
+  return request('/users');
 }
 
 export async function fetchDrivers() {
-  const res = await fetch(`${API_BASE}/drivers`);
-  return res.json();
+  return request('/drivers');
 }
 
 export async function searchPlaces(query, lat, lng) {
@@ -17,71 +31,57 @@ export async function searchPlaces(query, lat, lng) {
     params.append('lat', lat);
     params.append('lng', lng);
   }
-  const res = await fetch(`${API_BASE}/places/search?${params.toString()}`);
-  return res.json();
+  return request(`/places/search?${params.toString()}`);
 }
 
 export async function reverseGeocodePlace(lat, lng) {
-  const res = await fetch(`${API_BASE}/places/reverse?lat=${lat}&lng=${lng}`);
-  return res.json();
+  return request(`/places/reverse?lat=${lat}&lng=${lng}`);
 }
 
 export async function relocateDrivers(lat, lng) {
-  const res = await fetch(`${API_BASE}/drivers/relocate`, {
+  return request('/drivers/relocate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ lat, lng })
   });
-  return res.json();
 }
 
 export async function getFareQuotes(pickup, destination) {
-  const res = await fetch(`${API_BASE}/rides/quotes`, {
+  return request('/rides/quotes', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ pickup, destination })
   });
-  if (!res.ok) {
-    const error = await res.json();
-    throw new Error(error.error || 'Failed to calculate fare quotes');
-  }
-  return res.json();
 }
 
 export async function fetchActiveRide(userId) {
-  const res = await fetch(`${API_BASE}/rides/active/${userId}`);
-  return res.json();
+  return request(`/rides/active/${userId}`);
 }
 
 export async function fetchRideHistory(userId) {
-  const res = await fetch(`${API_BASE}/rides/history/${userId}`);
-  return res.json();
+  return request(`/rides/history/${userId}`);
 }
 
 export async function fetchWallet(userId) {
-  const res = await fetch(`${API_BASE}/wallet/${userId}`);
-  return res.json();
+  return request(`/wallet/${userId}`);
 }
 
 export async function topupWallet(userId, amount, paymentMethod) {
-  const res = await fetch(`${API_BASE}/wallet/topup`, {
+  return request('/wallet/topup', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ userId, amount, paymentMethod })
   });
-  return res.json();
 }
 
 export async function fetchAdminMetrics() {
-  const res = await fetch(`${API_BASE}/admin/metrics`);
-  return res.json();
+  return request('/admin/metrics');
 }
 
 export async function updateAdminSettings(settings) {
-  const res = await fetch(`${API_BASE}/admin/settings`, {
+  return request('/admin/settings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(settings)
   });
-  return res.json();
 }

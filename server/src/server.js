@@ -16,9 +16,14 @@ const server = http.createServer(app);
 
 const PORT = process.env.PORT || 5000;
 
-// Enable CORS for frontend Vite client
+const allowedOrigins = (process.env.CORS_ORIGIN || '*')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+// Enable CORS for the configured frontend origins.
 app.use(cors({
-  origin: '*',
+  origin: allowedOrigins.includes('*') ? '*' : allowedOrigins,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH']
 }));
 
@@ -27,7 +32,7 @@ app.use(express.json());
 // Initialize Socket.IO
 const io = new Server(server, {
   cors: {
-    origin: '*',
+    origin: allowedOrigins.includes('*') ? '*' : allowedOrigins,
     methods: ['GET', 'POST']
   }
 });
@@ -221,6 +226,6 @@ app.post('/api/admin/settings', (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`🚕 NexRide Server running on http://localhost:${PORT}`);
+  console.log(`NexRide Server running on port ${PORT}`);
   console.log(`📡 WebSocket ready on port ${PORT}`);
 });

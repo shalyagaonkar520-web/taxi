@@ -1,6 +1,6 @@
 import { io } from 'socket.io-client';
 
-const SOCKET_URL = window.location.port === '5173' ? 'http://localhost:5000' : '/';
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL?.trim() || undefined;
 
 export const socket = io(SOCKET_URL, {
   autoConnect: true,
