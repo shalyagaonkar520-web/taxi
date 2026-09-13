@@ -31,6 +31,10 @@ export default function ProfileModal({ user, onClose, onProfileUpdate }) {
       setStatus('Choose an image file');
       return;
     }
+    if (file.size > 2 * 1024 * 1024) {
+      setStatus('Choose an image smaller than 2 MB');
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => updateField('avatar', reader.result);
     reader.readAsDataURL(file);

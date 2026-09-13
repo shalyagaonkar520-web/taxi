@@ -50,7 +50,7 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH']
 }));
 
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 
 // Initialize Socket.IO
 const io = new Server(server, {
