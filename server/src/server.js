@@ -3,6 +3,7 @@ const http = require('http');
 const cors = require('cors');
 const { Server } = require('socket.io');
 const dotenv = require('dotenv');
+const admin = require('firebase-admin');
 
 dotenv.config();
 
@@ -17,6 +18,17 @@ const server = http.createServer(app);
 const PORT = process.env.PORT || 5000;
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@nexride.com';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+let firebaseAuth = null;
+
+if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+  try {
+    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+    firebaseAuth = admin.auth();
+  } catch (err) {
+    console.error('Firebase Admin configuration is invalid:', err.message);
+  }
+}
 
 const allowedOrigins = (process.env.CORS_ORIGIN || '*')
   .split(',')
@@ -71,6 +83,41 @@ app.post('/api/auth/login', (req, res) => {
 
   if (!user) return res.status(401).json({ error: 'Invalid credentials for this workspace' });
   res.json({ user: { ...user, role: normalizedRole } });
+});
+
+app.post('/api/auth/firebase', async (req, res) => {
+  if (!firebaseAuth) return res.status(503).json({ error: 'Firebase authentication is not configured on the server' });
+
+  const { idToken, role, profile } = req.body || {};
+  const normalizedRole = String(role || '').toUpperCase();
+  if (!idToken || !['RIDER', 'DRIVER', 'ADMIN'].includes(normalizedRole)) {
+    return res.status(400).json({ error: 'A Firebase token and valid role are required' });
+  }
+
+  try {
+    const decoded = await firebaseAuth.verifyIdToken(idToken);
+    const email = String(decoded.email || '').toLowerCase();
+    if (!email || decoded.email_verified === false) {
+      return res.status(401).json({ error: 'A verified Firebase account is required' });
+    }
+    if (normalizedRole === 'ADMIN' && email !== ADMIN_EMAIL.toLowerCase()) {
+      return res.status(403).json({ error: 'This account is not the NexRide admin account' });
+    }
+
+    const user = normalizedRole === 'ADMIN'
+      ? db.sanitizeUser(db.getUserById('admin-01'))
+      : db.upsertFirebaseUser({
+          uid: decoded.uid,
+          email,
+          name: profile?.name || decoded.name,
+          picture: profile?.picture || decoded.picture
+        }, normalizedRole);
+
+    if (!user) return res.status(403).json({ error: 'This account is assigned to another workspace' });
+    res.json({ user: { ...user, role: normalizedRole } });
+  } catch (err) {
+    res.status(401).json({ error: 'Invalid or expired Firebase token' });
+  }
 });
 
 // Users & Demo accounts

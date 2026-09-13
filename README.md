@@ -107,6 +107,24 @@ it imports the existing `server/data/db.json` seed state; subsequent writes are
 persisted to PostgreSQL. The JSON file remains as a local recovery fallback when
 `DATABASE_URL` is not configured.
 
+### Firebase Authentication
+
+Firebase Authentication is optional for local development and becomes available
+when the Firebase web settings are added to `client/.env` and the Firebase Admin
+service-account JSON is added only to `server/.env`.
+
+In Firebase Console:
+
+1. Enable **Email/Password** and **Google** sign-in providers.
+2. Add the authorized local and production domains.
+3. Create the one admin account using the email in `ADMIN_EMAIL`.
+4. Download a service account from **Project settings → Service accounts** and
+  set its JSON as `FIREBASE_SERVICE_ACCOUNT_JSON` on the server.
+
+Riders and drivers can then create accounts, sign in with Google, and request
+password-reset emails. Admin accounts cannot be self-created; the server only
+accepts the configured admin email for the admin workspace.
+
 ---
 
 ## 📡 REST API & WebSocket Events

@@ -25,6 +25,15 @@ export async function loginUser(email, password, role) {
   return result.user;
 }
 
+export async function loginWithFirebaseToken(idToken, role, profile) {
+  const result = await request('/auth/firebase', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ idToken, role, profile })
+  });
+  return result.user;
+}
+
 export async function fetchUsers() {
   return request('/users');
 }

@@ -281,6 +281,38 @@ class Database {
     return this.sanitizeUser(user);
   }
 
+  upsertFirebaseUser(firebaseUser, role) {
+    let user = this.data.users.find(candidate =>
+      candidate.firebaseUid === firebaseUser.uid ||
+      candidate.email.toLowerCase() === firebaseUser.email.toLowerCase()
+    );
+
+    if (user && user.role !== role) return null;
+    if (!user) {
+      user = {
+        id: `firebase-${firebaseUser.uid}`,
+        firebaseUid: firebaseUser.uid,
+        name: firebaseUser.name || firebaseUser.email.split('@')[0],
+        email: firebaseUser.email,
+        role,
+        rating: 5,
+        walletBalance: 0,
+        avatar: firebaseUser.picture || null,
+        ...(role === 'DRIVER' ? { status: 'OFFLINE', totalTrips: 0, acceptanceRate: 100 } : { totalRides: 0 })
+      };
+      this.data.users.push(user);
+    } else {
+      Object.assign(user, {
+        firebaseUid: firebaseUser.uid,
+        name: firebaseUser.name || user.name,
+        avatar: firebaseUser.picture || user.avatar
+      });
+    }
+
+    this.saveData();
+    return this.sanitizeUser(user);
+  }
+
   loadData() {
     try {
       if (fs.existsSync(DB_FILE)) {
