@@ -1,109 +1,96 @@
-import React, { useState } from 'react';
-import { 
-  Car, 
-  Wallet, 
-  Star, 
-  Plus, 
-  User, 
-  ChevronDown, 
-  Clock, 
-  Activity,
-  Zap,
-  MapPin
-} from 'lucide-react';
+import React from 'react';
+import { Car, Wallet, Star, Plus, Sun, Moon } from 'lucide-react';
 
-export default function Navbar({ 
-  currentRole, 
-  user, 
-  walletBalance, 
+export default function Navbar({
+  currentRole,
+  user,
+  walletBalance,
   onOpenWallet,
-  onOpenHistory,
-  isConnected 
+  isConnected,
+  theme,
+  onToggleTheme
 }) {
-  const [showUserDropdown, setShowUserDropdown] = useState(false);
+  const isRider = currentRole === 'RIDER';
 
   return (
-    <header className="sticky top-0 z-50 w-full glass-panel border-b border-white/10 px-4 lg:px-8 py-3 transition-all">
-      <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
-        
-        {/* Brand Logo */}
-        <div className="flex items-center gap-3">
-          <div className="h-10 w-10 rounded-xl bg-gradient-to-tr from-uber-accent to-blue-400 flex items-center justify-center shadow-lg shadow-uber-accent/25 ring-1 ring-white/20">
-            <Car className="w-6 h-6 text-white" />
+    <header className="shrink-0 z-50 w-full glass-panel border-b px-3 sm:px-5 lg:px-8 py-2.5">
+      <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
+        {/* Brand */}
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="shrink-0 h-9 w-9 rounded-xl bg-uber-accent flex items-center justify-center shadow-md shadow-uber-accent/25">
+            <Car className="w-5 h-5 text-white" />
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-extrabold text-xl tracking-tight bg-gradient-to-r from-white via-gray-100 to-gray-400 bg-clip-text text-transparent">
-                NexRide
-              </span>
-              <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-uber-accent/20 text-uber-accent border border-uber-accent/30">
-                Live
-              </span>
-            </div>
-            <p className="text-[11px] text-gray-400 font-medium hidden sm:block">Next-Gen Ride Hailing Platform</p>
+          <div className="min-w-0">
+            <p className="font-extrabold text-lg leading-tight tracking-tight text-slate-900 dark:text-white">
+              NexRide
+            </p>
+            <p className="text-[11px] font-medium leading-tight text-slate-500 dark:text-slate-400 hidden sm:block">
+              {isRider ? 'Book a ride' : currentRole === 'DRIVER' ? 'Driver workspace' : 'Admin workspace'}
+            </p>
           </div>
         </div>
 
-        <div className="hidden sm:flex items-center px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 text-xs font-semibold text-gray-300">
-          {currentRole === 'RIDER' ? 'Rider workspace' : currentRole === 'DRIVER' ? 'Driver workspace' : 'Admin workspace'}
-        </div>
+        {/* Right side */}
+        <div className="flex items-center gap-2 shrink-0">
+          {/* Connection dot - icon only on small screens so nothing wraps */}
+          <span
+            title={isConnected ? 'Connected' : 'Reconnecting…'}
+            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-slate-100 dark:bg-white/5 text-[11px] font-semibold text-slate-600 dark:text-slate-300"
+          >
+            <span
+              className={`w-2 h-2 rounded-full ${isConnected ? 'bg-uber-green animate-pulse' : 'bg-uber-red'}`}
+            />
+            {isConnected ? 'Live' : 'Reconnecting…'}
+          </span>
 
-        {/* Right Section: Connection, Wallet & Profile */}
-        <div className="flex items-center gap-3">
-          
-          {/* Live Status Indicator */}
-          <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/30 border border-white/5 text-[11px] text-gray-300">
-            <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-uber-green animate-pulse' : 'bg-uber-red'}`} />
-            <span>{isConnected ? 'Real-Time Sync' : 'Reconnecting...'}</span>
-          </div>
-
-          {/* Wallet Balance Pill */}
-          {currentRole === 'RIDER' && (
+          {isRider && (
             <button
               onClick={onOpenWallet}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-semibold text-white transition-all group"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/20 text-xs font-extrabold text-slate-800 dark:text-white transition-colors"
             >
-              <div className="w-5 h-5 rounded-lg bg-uber-accent/20 flex items-center justify-center text-uber-accent group-hover:scale-110 transition-transform">
-                <Wallet className="w-3.5 h-3.5" />
-              </div>
+              <Wallet className="w-4 h-4 text-uber-accent" />
               <span>${Number(walletBalance || 0).toFixed(2)}</span>
-              <Plus className="w-3.5 h-3.5 text-gray-400 group-hover:text-white" />
+              <Plus className="w-3.5 h-3.5 text-slate-500 dark:text-slate-400" />
             </button>
           )}
 
-          {/* User History Button */}
-          {currentRole === 'RIDER' && (
+          {onToggleTheme && (
             <button
-              onClick={onOpenHistory}
-              title="Ride History"
-              className="p-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300 hover:text-white transition-all"
+              onClick={onToggleTheme}
+              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              className="w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/20 text-slate-700 dark:text-slate-200 flex items-center justify-center transition-colors"
             >
-              <Clock className="w-4 h-4" />
+              {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
           )}
 
-          {/* User Avatar */}
           {user && (
-            <div className="relative">
-              <div className="flex items-center gap-2 pl-2 border-l border-white/10">
-                <img
-                  src={user.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80'}
-                  alt={user.name}
-                  className="w-8 h-8 rounded-xl object-cover ring-2 ring-white/10"
-                />
-                <div className="hidden lg:block text-left">
-                  <p className="text-xs font-bold leading-none">{user.name}</p>
-                  <div className="flex items-center gap-1 mt-0.5">
-                    <Star className="w-3 h-3 fill-uber-gold text-uber-gold" />
-                    <span className="text-[11px] text-gray-400 font-medium">{user.rating || 4.9}</span>
-                  </div>
-                </div>
-              </div>
+            <img
+              src={
+                user.avatar ||
+                'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80'
+              }
+              alt={user.name}
+              title={`${user.name} · ${user.rating || 4.9} ★`}
+              className="w-9 h-9 rounded-full object-cover ring-2 ring-slate-200 dark:ring-white/10 bg-slate-200"
+            />
+          )}
+
+          {user && (
+            <div className="hidden lg:block text-left min-w-0">
+              <p className="text-xs font-bold leading-none text-slate-900 dark:text-white truncate">
+                {user.name}
+              </p>
+              <p className="flex items-center gap-1 mt-1">
+                <Star className="w-3 h-3 fill-uber-gold text-uber-gold" />
+                <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                  {user.rating || 4.9}
+                </span>
+              </p>
             </div>
           )}
-
         </div>
-
       </div>
     </header>
   );

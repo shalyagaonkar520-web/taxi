@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Wallet, Plus, CreditCard, ArrowDownLeft, ArrowUpRight, X, CheckCircle, Shield } from 'lucide-react';
+import { Wallet, Plus, ArrowDownLeft, ArrowUpRight, X, CheckCircle, Shield } from 'lucide-react';
 import { fetchWallet, topupWallet } from '../services/api';
 
 export default function WalletModal({ user, onClose, onBalanceUpdate }) {
@@ -32,7 +32,7 @@ export default function WalletModal({ user, onClose, onBalanceUpdate }) {
       setBalance(res.balance);
       if (onBalanceUpdate) onBalanceUpdate(res.balance);
       setTransactions((prev) => [res.transaction, ...prev]);
-      setSuccessMsg(`Successfully added $${topupAmount}!`);
+      setSuccessMsg(`Added $${topupAmount} to your wallet.`);
       setTimeout(() => setSuccessMsg(''), 3000);
     } catch (err) {
       console.error('Failed to topup:', err);
@@ -42,46 +42,55 @@ export default function WalletModal({ user, onClose, onBalanceUpdate }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-      <div className="glass-card max-w-md w-full rounded-3xl p-6 border border-white/15 shadow-2xl flex flex-col gap-5 animate-in zoom-in-95">
-        
+    <div className="fixed inset-0 z-[90] bg-black/50 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div className="w-full sm:max-w-md max-h-[88vh] overflow-y-auto bg-white dark:bg-[#16161b] rounded-t-3xl sm:rounded-3xl p-5 shadow-2xl flex flex-col gap-5">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-white/10 pb-3">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-xl bg-uber-accent/20 text-uber-accent flex items-center justify-center">
+        <div className="flex items-center justify-between gap-3 pb-3 border-b border-slate-200 dark:border-white/10">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="shrink-0 w-9 h-9 rounded-xl bg-uber-accent/10 text-uber-accent flex items-center justify-center">
               <Wallet className="w-4 h-4" />
-            </div>
-            <h3 className="text-base font-extrabold text-white">NexRide Wallet</h3>
+            </span>
+            <h3 className="text-base font-extrabold text-slate-900 dark:text-white">Your wallet</h3>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors">
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="shrink-0 w-9 h-9 rounded-full bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-slate-300 flex items-center justify-center"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Balance Card */}
-        <div className="bg-gradient-to-br from-uber-accent/25 via-blue-900/20 to-black p-5 rounded-2xl border border-uber-accent/30 flex flex-col gap-1 shadow-lg">
-          <span className="text-xs font-bold text-gray-300 uppercase tracking-wider">Available Balance</span>
-          <p className="text-3xl font-extrabold text-white">${Number(balance).toFixed(2)}</p>
-          <div className="flex items-center gap-1 text-[11px] text-blue-300 font-semibold mt-1">
-            <Shield className="w-3.5 h-3.5 text-uber-green" /> 100% Encrypted In-App Payments
-          </div>
+        {/* Balance */}
+        <div className="rounded-2xl bg-uber-accent/10 border border-uber-accent/20 p-5 flex flex-col gap-1">
+          <span className="text-xs font-bold uppercase tracking-wider text-uber-accent">
+            Money you have
+          </span>
+          <p className="text-3xl font-black text-slate-900 dark:text-white">
+            ${Number(balance).toFixed(2)}
+          </p>
+          <p className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 dark:text-slate-400 mt-1">
+            <Shield className="w-3.5 h-3.5 text-uber-green shrink-0" /> Payments are safe and encrypted
+          </p>
         </div>
 
-        {/* Top-Up Presets */}
-        <div className="flex flex-col gap-2">
-          <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Add Funds</span>
+        {/* Top up */}
+        <div className="flex flex-col gap-3">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+            Add money
+          </span>
           <div className="grid grid-cols-3 gap-2">
             {[25, 50, 100].map((amt) => (
               <button
                 key={amt}
                 onClick={() => setTopupAmount(amt)}
-                className={`py-2.5 rounded-xl font-extrabold text-xs transition-all border ${
+                className={`py-3 rounded-xl font-extrabold text-sm transition-all border-2 ${
                   topupAmount === amt
-                    ? 'bg-uber-accent text-white border-uber-accent shadow-md shadow-uber-accent/30'
-                    : 'bg-black/40 text-gray-300 border-white/10 hover:bg-white/5'
+                    ? 'bg-uber-accent/5 text-uber-accent border-uber-accent'
+                    : 'border-slate-200 dark:border-white/10 text-slate-700 dark:text-slate-200'
                 }`}
               >
-                +${amt}
+                ${amt}
               </button>
             ))}
           </div>
@@ -89,55 +98,72 @@ export default function WalletModal({ user, onClose, onBalanceUpdate }) {
           <button
             onClick={handleTopup}
             disabled={loading}
-            className="mt-2 w-full py-3 rounded-xl bg-uber-accent hover:bg-uber-accentHover font-extrabold text-white text-xs shadow-lg shadow-uber-accent/25 transition-all flex items-center justify-center gap-2"
+            className="w-full py-3.5 rounded-2xl bg-uber-accent hover:bg-uber-accentHover text-white font-extrabold text-sm shadow-lg shadow-uber-accent/25 transition-all flex items-center justify-center gap-2 disabled:opacity-60"
           >
             <Plus className="w-4 h-4" />
-            <span>{loading ? 'Processing...' : `Add $${topupAmount} to Wallet`}</span>
+            {loading ? 'Please wait…' : `Add $${topupAmount}`}
           </button>
 
           {successMsg && (
-            <p className="text-xs text-uber-green font-bold text-center flex items-center justify-center gap-1">
-              <CheckCircle className="w-3.5 h-3.5" /> {successMsg}
+            <p className="flex items-center justify-center gap-1.5 text-xs font-bold text-uber-green">
+              <CheckCircle className="w-4 h-4" /> {successMsg}
             </p>
           )}
         </div>
 
-        {/* Recent Transactions */}
-        <div className="flex flex-col gap-2 pt-2 border-t border-white/10">
-          <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Recent Activity</span>
-          <div className="flex flex-col gap-1.5 max-h-48 overflow-y-auto pr-1">
+        {/* Activity */}
+        <div className="flex flex-col gap-2 pt-3 border-t border-slate-200 dark:border-white/10">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+            Recent activity
+          </span>
+          <div className="flex flex-col gap-2 max-h-56 overflow-y-auto pr-1">
             {transactions.length === 0 ? (
-              <p className="text-xs text-gray-500 text-center py-4">No transactions recorded</p>
+              <p className="text-sm text-slate-500 dark:text-slate-400 text-center py-4">
+                Nothing here yet.
+              </p>
             ) : (
               transactions.map((tx) => {
                 const isDeposit = tx.amount > 0;
                 return (
                   <div
                     key={tx.id}
-                    className="flex items-center justify-between p-2.5 rounded-xl bg-black/30 border border-white/5 text-xs"
+                    className="flex items-center justify-between gap-3 p-3 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10"
                   >
-                    <div className="flex items-center gap-2.5">
-                      <div
-                        className={`w-7 h-7 rounded-lg flex items-center justify-center ${
-                          isDeposit ? 'bg-uber-green/20 text-uber-green' : 'bg-white/10 text-gray-300'
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span
+                        className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${
+                          isDeposit
+                            ? 'bg-uber-green/15 text-uber-green'
+                            : 'bg-slate-200 dark:bg-white/10 text-slate-600 dark:text-slate-300'
                         }`}
                       >
                         {isDeposit ? (
-                          <ArrowDownLeft className="w-3.5 h-3.5" />
+                          <ArrowDownLeft className="w-4 h-4" />
                         ) : (
-                          <ArrowUpRight className="w-3.5 h-3.5" />
+                          <ArrowUpRight className="w-4 h-4" />
                         )}
-                      </div>
-                      <div>
-                        <p className="font-bold text-white truncate max-w-[190px]">{tx.description}</p>
-                        <span className="text-[10px] text-gray-500">
-                          {new Date(tx.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                          {tx.description}
+                        </p>
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                          {new Date(tx.timestamp).toLocaleDateString([], {
+                            month: 'short',
+                            day: 'numeric'
+                          })}
                         </span>
                       </div>
                     </div>
 
-                    <span className={`font-extrabold ${isDeposit ? 'text-uber-green' : 'text-white'}`}>
-                      {isDeposit ? `+$${tx.amount.toFixed(2)}` : `-$${Math.abs(tx.amount).toFixed(2)}`}
+                    <span
+                      className={`shrink-0 text-sm font-extrabold ${
+                        isDeposit ? 'text-uber-green' : 'text-slate-900 dark:text-white'
+                      }`}
+                    >
+                      {isDeposit
+                        ? `+$${tx.amount.toFixed(2)}`
+                        : `-$${Math.abs(tx.amount).toFixed(2)}`}
                     </span>
                   </div>
                 );
@@ -145,7 +171,6 @@ export default function WalletModal({ user, onClose, onBalanceUpdate }) {
             )}
           </div>
         </div>
-
       </div>
     </div>
   );
