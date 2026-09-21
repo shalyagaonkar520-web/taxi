@@ -41,16 +41,46 @@ export default function AdminView({ drivers }) {
     }
   };
 
+  const [sosAlert, setSosAlert] = useState(null);
+
   useEffect(() => {
     loadMetrics();
 
-    // Listen to live ride events
-    socket.on('admin:ride_event', (event) => {
+    // Listen to live ride events across all panels
+    const handleRideEvent = (event) => {
       loadMetrics();
-    });
+    };
+
+    // Listen to settings changes saved by any admin
+    const handleSettingsUpdated = (newSettings) => {
+      if (newSettings) {
+        if (newSettings.surgeMultiplier !== undefined) setSurge(newSettings.surgeMultiplier);
+        if (newSettings.platformCommissionPercent !== undefined) setCommission(newSettings.platformCommissionPercent);
+        loadMetrics();
+      }
+    };
+
+    // Listen to driver status changes
+    const handleDriverStatus = () => {
+      loadMetrics();
+    };
+
+    // Listen to emergency SOS broadcasts
+    const handleSosAlert = (data) => {
+      setSosAlert(data);
+      setTimeout(() => setSosAlert(null), 10000);
+    };
+
+    socket.on('admin:ride_event', handleRideEvent);
+    socket.on('settings:updated', handleSettingsUpdated);
+    socket.on('driver:status_changed', handleDriverStatus);
+    socket.on('admin:sos_alert', handleSosAlert);
 
     return () => {
-      socket.off('admin:ride_event');
+      socket.off('admin:ride_event', handleRideEvent);
+      socket.off('settings:updated', handleSettingsUpdated);
+      socket.off('driver:status_changed', handleDriverStatus);
+      socket.off('admin:sos_alert', handleSosAlert);
     };
   }, []);
 
@@ -72,6 +102,31 @@ export default function AdminView({ drivers }) {
   return (
     <div className="w-full max-w-4xl mx-auto flex flex-col gap-6 animate-in fade-in duration-300">
       
+      {/* SOS EMERGENCY DISPATCH ALERT BANNER */}
+      {sosAlert && (
+        <div className="p-4 rounded-3xl bg-red-500/20 border-2 border-red-500/80 text-white flex items-center justify-between shadow-2xl animate-bounce">
+          <div className="flex items-center gap-3">
+            <span className="text-2xl">🚨</span>
+            <div>
+              <h4 className="text-sm font-black text-red-300">EMERGENCY SOS BROADCAST</h4>
+              <p className="text-xs text-white">Ride ID: {sosAlert.rideId} • {sosAlert.note || 'Emergency assistance requested'}</p>
+            </div>
+          </div>
+          <button onClick={() => setSosAlert(null)} className="px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-xs font-bold text-white">
+            Acknowledge
+          </button>
+        </div>
+      )}
+
+      {/* ADMIN SYNC STATUS BADGE */}
+      <div className="flex items-center justify-between text-xs text-gray-400 px-1">
+        <div className="flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+          <span className="font-semibold text-gray-300">Connected to Dispatch Engine • All Admins Synced</span>
+        </div>
+        <span className="text-[11px] font-mono text-gray-500">Auto-refresh on live ride & settings events</span>
+      </div>
+
       {/* 1. METRICS CARDS */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Total Gross Revenue */}

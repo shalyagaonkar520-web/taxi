@@ -18,6 +18,7 @@ export default function Navbar({
   walletBalance, 
   onOpenWallet,
   onOpenHistory,
+  onSwitchAccount,
   isConnected 
 }) {
   const [showUserDropdown, setShowUserDropdown] = useState(false);
@@ -85,7 +86,11 @@ export default function Navbar({
           {/* User Avatar */}
           {user && (
             <div className="relative">
-              <div className="flex items-center gap-2 pl-2 border-l border-white/10">
+              <button
+                onClick={onSwitchAccount}
+                title="Switch Profile / Demo Account"
+                className="touch-target flex items-center gap-2 pl-2 border-l border-white/10 hover:opacity-80 transition-opacity"
+              >
                 <img
                   src={user.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80'}
                   alt={user.name}
@@ -98,7 +103,7 @@ export default function Navbar({
                     <span className="text-[11px] text-gray-400 font-medium">{user.rating || 4.9}</span>
                   </div>
                 </div>
-              </div>
+              </button>
             </div>
           )}
 

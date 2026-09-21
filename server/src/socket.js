@@ -1,22 +1,15 @@
 const db = require('./db');
-const { calculateHaversineDistance, calculateHeading, getDrivingRoute } = require('./services/routing');
+const { calculateHeading, getDrivingRoute } = require('./services/routing');
 const { calculateFare } = require('./services/pricing');
+const ivrService = require('./services/ivrService');
 
 function setupSocketIO(io) {
   // Connected socket mappings: userId -> socketId
   const userSockets = new Map();
-  // Simulated trip timers for smooth automated navigation when needed
+  // Active dispatch timers and queues: rideId -> { candidateDrivers: [], currentIndex: number, timer: NodeJS.Timeout }
+  const dispatchSessions = new Map();
+  // Active route simulation timers: driverId -> timer
   const activeSimulations = new Map();
-
-  // Do not restore abandoned dispatch requests after a server restart.
-  db.getRides()
-    .filter(ride => ride.status === 'REQUESTED')
-    .filter(ride => Date.now() - new Date(ride.createdAt).getTime() > 30000)
-    .forEach(ride => db.updateRide(ride.id, {
-      status: 'CANCELLED',
-      cancelledAt: new Date().toISOString(),
-      cancellationReason: 'Dispatch request expired'
-    }));
 
   io.on('connection', (socket) => {
     let currentUserId = null;
@@ -28,37 +21,37 @@ function setupSocketIO(io) {
       currentUserRole = role;
       userSockets.set(userId, socket.id);
       socket.join(`user:${userId}`);
+
       if (role) {
         socket.join(`role:${role.toLowerCase()}`);
+        socket.join(`role:${role.toUpperCase()}`);
       }
 
-      // Send initial state snapshot
+      // If driver, also join driver's id and userId rooms
+      if (role === 'DRIVER') {
+        const driver = db.getDriverById(userId);
+        if (driver) {
+          socket.join(`user:${driver.id}`);
+          userSockets.set(driver.id, socket.id);
+          if (driver.userId) {
+            socket.join(`user:${driver.userId}`);
+            userSockets.set(driver.userId, socket.id);
+          }
+        }
+      }
+
+      const activeRide = db.getActiveRideForUser(userId);
+
+      // Send initial state snapshot with active ride restored
       socket.emit('init:state', {
         drivers: db.getDrivers(),
-        activeRide: db.getActiveRideForUser(userId),
+        activeRide: activeRide || null,
         settings: db.getSettings()
       });
 
-      // Re-deliver pending requests when a driver connects after dispatch.
-      if (role === 'DRIVER') {
-        const pendingRide = db.getRides().find(ride => ride.status === 'REQUESTED' && !ride.driverId);
-        const driver = db.getDriverById(userId);
-        if (pendingRide && driver?.status === 'ONLINE') {
-          const rider = db.getUserById(pendingRide.riderId);
-          const toPickupRoute = await getDrivingRoute(driver.location, pendingRide.pickup);
-          const settings = db.getSettings();
-          socket.emit('ride:incoming_request', {
-            ride: pendingRide,
-            rider: {
-              name: rider?.name || 'Passenger',
-              rating: rider?.rating || 4.9,
-              avatar: rider?.avatar
-            },
-            pickupDistanceKm: toPickupRoute.distanceKm,
-            pickupDurationMin: toPickupRoute.durationMin,
-            estimatedEarnings: Number((pendingRide.fare * (1 - settings.platformCommissionPercent / 100)).toFixed(2))
-          });
-        }
+      // If reconnecting and has an active ride, restore room & state
+      if (activeRide) {
+        socket.join(`ride:${activeRide.id}`);
       }
     });
 
@@ -95,82 +88,111 @@ function setupSocketIO(io) {
       }
     });
 
+    socket.on('driver:status', ({ driverId, status, destinationMode }) => {
+      const updated = db.updateDriver(driverId, { status });
+      if (destinationMode !== undefined) {
+        db.setDriverDestination(driverId, destinationMode);
+      }
+      if (updated) {
+        io.emit('driver:status_changed', { driverId, status, destinationMode });
+      }
+    });
+
+    // Arrival wait timer with grace period fee broadcast
+    socket.on('trip:wait_timer', ({ rideId, waitingSeconds, waitingFee }) => {
+      if (rideId) {
+        io.to(`ride:${rideId}`).emit('trip:wait_timer_update', { rideId, waitingSeconds, waitingFee });
+      }
+    });
+
+    // Driver cancels with reason code
+    socket.on('ride:cancel_reason', ({ rideId, driverId, reason }) => {
+      if (rideId) {
+        const updated = db.updateRide(rideId, {
+          status: 'CANCELLED',
+          cancellationReason: reason,
+          cancelledAt: new Date().toISOString()
+        });
+        if (driverId) {
+          db.updateDriver(driverId, { status: 'ONLINE' });
+          io.emit('driver:status_changed', { driverId, status: 'ONLINE' });
+        }
+        io.to(`ride:${rideId}`).emit('ride:cancelled_by_driver', {
+          rideId,
+          reason,
+          message: `Driver cancelled trip: ${reason}`
+        });
+        io.to('role:admin').emit('admin:ride_event', { type: 'RIDE_CANCELLED', ride: updated, reason });
+        io.to('role:ADMIN').emit('admin:ride_event', { type: 'RIDE_CANCELLED', ride: updated, reason });
+        io.emit('ride:updated', updated);
+      }
+    });
+
     // Rider requests a ride
     socket.on('ride:request', async (requestData) => {
       const { riderId, pickup, destination, category, paymentMethod = 'WALLET' } = requestData;
       const settings = db.getSettings();
 
-      // Calculate route
-      const routeInfo = await getDrivingRoute(pickup, destination);
-      const fareInfo = calculateFare({
-        category,
-        distanceKm: routeInfo.distanceKm,
-        durationMin: routeInfo.durationMin,
-        surgeMultiplier: settings.surgeMultiplier
-      });
-
-      // Create new ride record
-      const newRide = db.createRide({
-        riderId,
-        pickup,
-        destination,
-        category,
-        fare: fareInfo.totalFare,
-        distanceKm: routeInfo.distanceKm,
-        durationMin: routeInfo.durationMin,
-        paymentMethod,
-        routeCoordinates: routeInfo.coordinates,
-        status: 'REQUESTED'
-      });
-
-      const rider = db.getUserById(riderId);
-
-      // Find nearby online drivers (matching category if possible)
-      const drivers = db.getDrivers().filter(d => d.status === 'ONLINE');
-      let targetDriver = null;
-
-      if (drivers.length > 0) {
-        // Sort by distance to pickup
-        const sorted = drivers.map(d => ({
-          driver: d,
-          dist: calculateHaversineDistance(pickup.lat, pickup.lng, d.location.lat, d.location.lng)
-        })).sort((a, b) => a.dist - b.dist);
-
-        targetDriver = sorted[0].driver;
-      }
-
-      // Notify the rider that ride is created & dispatching
-      socket.emit('ride:created', newRide);
-      io.to('role:admin').emit('admin:ride_event', { type: 'RIDE_REQUESTED', ride: newRide });
-
-      if (targetDriver) {
-        // Calculate driver to pickup route for preview
-        const toPickupRoute = await getDrivingRoute(targetDriver.location, pickup);
-        
-        // Notify the target driver with 15s acceptance window
-        io.to(`user:${targetDriver.id}`).emit('ride:incoming_request', {
-          ride: newRide,
-          rider: {
-            name: rider?.name || 'Passenger',
-            rating: rider?.rating || 4.9,
-            avatar: rider?.avatar
-          },
-          pickupDistanceKm: toPickupRoute.distanceKm,
-          pickupDurationMin: toPickupRoute.durationMin,
-          estimatedEarnings: Number((newRide.fare * (1 - settings.platformCommissionPercent / 100)).toFixed(2))
+      try {
+        // Calculate driving route using OSRM
+        const routeInfo = await getDrivingRoute(pickup, destination);
+        const fareInfo = calculateFare({
+          category,
+          distanceKm: routeInfo.distanceKm,
+          durationMin: routeInfo.durationMin,
+          surgeMultiplier: settings.surgeMultiplier
         });
-      } else {
-        // Fallback: If no manual driver online, auto-simulate driver acceptance in 3 seconds
-        setTimeout(() => {
-          simulateAutoDriverAcceptance(io, newRide.id);
-        }, 3000);
+
+        // Create new ride record in SQLite
+        const newRide = db.createRide({
+          riderId,
+          pickup,
+          destination,
+          category,
+          fare: fareInfo.totalFare,
+          distanceKm: routeInfo.distanceKm,
+          durationMin: routeInfo.durationMin,
+          paymentMethod,
+          routeCoordinates: routeInfo.coordinates,
+          status: 'REQUESTED'
+        });
+
+        socket.join(`ride:${newRide.id}`);
+
+        // Notify rider that request is submitted
+        socket.emit('ride:created', newRide);
+        io.to('role:admin').emit('admin:ride_event', { type: 'RIDE_REQUESTED', ride: newRide });
+
+        // Dispatch by ETA (OSRM)
+        dispatchRideByEta(io, newRide, dispatchSessions);
+
+      } catch (err) {
+        console.error('Failed to dispatch ride:', err);
+        socket.emit('ride:error', { message: 'Could not calculate route. Please try a different location.' });
       }
     });
 
-    // Rider cancels a request before a driver accepts it.
+    // Rider cancels request before pickup
     socket.on('ride:cancel', ({ rideId, riderId }) => {
       const ride = db.getRideById(rideId);
-      if (!ride || ride.riderId !== riderId || !['REQUESTED', 'MATCHING'].includes(ride.status)) return;
+      if (!ride || !['REQUESTED', 'MATCHING', 'ACCEPTED'].includes(ride.status)) return;
+
+      // Clean up dispatch session if pending
+      if (dispatchSessions.has(rideId)) {
+        const session = dispatchSessions.get(rideId);
+        if (session.timer) clearTimeout(session.timer);
+        if (session.currentDriverId) {
+          io.to(`user:${session.currentDriverId}`).emit('ride:request_cancelled', { rideId });
+        }
+        dispatchSessions.delete(rideId);
+      }
+
+      // If a driver was already assigned, free them
+      if (ride.driverId) {
+        db.updateDriver(ride.driverId, { status: 'ONLINE' });
+        io.emit('driver:status_changed', { driverId: ride.driverId, status: 'ONLINE' });
+        io.to(`user:${ride.driverId}`).emit('ride:cancelled_by_rider', { rideId, message: 'The rider has cancelled this trip.' });
+      }
 
       const updatedRide = db.updateRide(rideId, {
         status: 'CANCELLED',
@@ -182,15 +204,21 @@ function setupSocketIO(io) {
       io.to('role:admin').emit('admin:ride_event', { type: 'RIDE_CANCELLED', ride: updatedRide });
     });
 
-    // Driver accepts ride request
+    // Driver accepts ride request within the 15-second window
     socket.on('ride:accept', async ({ rideId, driverId }) => {
+      const session = dispatchSessions.get(rideId);
+      if (session) {
+        if (session.timer) clearTimeout(session.timer);
+        dispatchSessions.delete(rideId);
+      }
+
       const ride = db.getRideById(rideId);
       const driver = db.getDriverById(driverId);
       if (!ride || !driver) return;
 
-      // Update ride and driver statuses
       db.updateDriver(driverId, { status: 'BUSY' });
       
+      // Calculate driver to pickup route for live navigation
       const toPickupRoute = await getDrivingRoute(driver.location, ride.pickup);
       
       const updatedRide = db.updateRide(rideId, {
@@ -202,8 +230,9 @@ function setupSocketIO(io) {
       });
 
       const rider = db.getUserById(ride.riderId);
+      socket.join(`ride:${rideId}`);
 
-      // Broadcast to Rider & Driver & Admin
+      // Broadcast to Rider
       io.to(`user:${ride.riderId}`).emit('ride:accepted', {
         ride: updatedRide,
         driver: {
@@ -219,6 +248,7 @@ function setupSocketIO(io) {
         etaToPickupMin: toPickupRoute.durationMin
       });
 
+      // Confirm to Driver
       socket.emit('ride:accepted_confirmation', {
         ride: updatedRide,
         rider,
@@ -228,8 +258,13 @@ function setupSocketIO(io) {
       io.emit('driver:status_changed', { driverId, status: 'BUSY' });
       io.to('role:admin').emit('admin:ride_event', { type: 'RIDE_ACCEPTED', ride: updatedRide, driver });
 
-      // Start automatic simulated smooth GPS progression to pickup if it's a simulated driver
-      startDriverMovementSimulation(io, driverId, toPickupRoute.coordinates, 'TO_PICKUP', rideId);
+      // Start automatic simulated smooth GPS progression to pickup
+      startDriverMovementSimulation(io, driverId, toPickupRoute.coordinates, 'TO_PICKUP', rideId, activeSimulations);
+    });
+
+    // Driver explicitly declines ride request
+    socket.on('ride:decline', ({ rideId, driverId }) => {
+      handleDriverDeclineOrTimeout(io, rideId, driverId, dispatchSessions);
     });
 
     // Driver arrives at pickup location
@@ -251,11 +286,12 @@ function setupSocketIO(io) {
       io.to('role:admin').emit('admin:ride_event', { type: 'DRIVER_ARRIVED', ride: updatedRide });
     });
 
-    // Driver verifies OTP and starts the ride
+    // Driver verifies OTP PIN and starts the ride
     socket.on('ride:start', async ({ rideId, driverId, otp }) => {
       const ride = db.getRideById(rideId);
       if (!ride) return;
 
+      // 4-digit security PIN verification
       if (ride.otp && otp && ride.otp.trim() !== otp.trim()) {
         socket.emit('ride:error', { message: 'Invalid 4-digit security PIN. Please ask the rider.' });
         return;
@@ -283,12 +319,12 @@ function setupSocketIO(io) {
       io.to('role:admin').emit('admin:ride_event', { type: 'RIDE_STARTED', ride: updatedRide });
 
       // Start smooth movement along destination route
-      startDriverMovementSimulation(io, driverId, toDestinationRoute.coordinates, 'TO_DESTINATION', rideId);
+      startDriverMovementSimulation(io, driverId, toDestinationRoute.coordinates, 'TO_DESTINATION', rideId, activeSimulations);
     });
 
     // Driver completes the trip
     socket.on('ride:complete', ({ rideId, driverId }) => {
-      completeRideWorkflow(io, rideId, driverId);
+      completeRideWorkflow(io, rideId, driverId, activeSimulations);
     });
 
     // Rider submits rating & tip
@@ -303,13 +339,12 @@ function setupSocketIO(io) {
         ratedAt: new Date().toISOString()
       });
 
-      // If tip provided, handle tip transaction
       if (tip > 0 && ride.driverId) {
         const driver = db.getDriverById(ride.driverId);
         const rider = db.getUserById(riderId);
 
         if (rider && driver) {
-          db.updateUser(riderId, { walletBalance: (rider.walletBalance || 0) - tip });
+          db.updateUser(riderId, { walletBalance: Math.max(0, (rider.walletBalance || 0) - tip) });
           db.updateDriver(ride.driverId, { 
             walletBalance: (driver.walletBalance || 0) + tip,
             earningsToday: (driver.earningsToday || 0) + tip
@@ -319,7 +354,7 @@ function setupSocketIO(io) {
             userId: riderId,
             amount: -tip,
             type: 'TIP',
-            description: `Driver Tip for trip to ${ride.destination.address.split(',')[0]}`
+            description: `Driver Tip for trip to ${ride.destination.address?.split(',')[0] || 'Destination'}`
           });
 
           db.addTransaction({
@@ -363,6 +398,31 @@ function setupSocketIO(io) {
       socket.emit('chat:message', message);
     });
 
+    // SOS Emergency Broadcast
+    socket.on('ride:sos', ({ rideId, userId, location, note }) => {
+      const ride = db.getRideById(rideId);
+      const user = db.getUserById(userId);
+      const sosAlert = {
+        id: `sos-${Date.now()}`,
+        rideId,
+        userId,
+        userName: user ? user.name : 'Passenger',
+        userPhone: user ? user.phone : 'Emergency Dispatch',
+        location,
+        note: note || 'SOS Emergency Button Triggered!',
+        timestamp: new Date().toISOString()
+      };
+
+      // Broadcast immediately to admin god-view and both parties
+      io.to('role:admin').emit('admin:sos_alert', sosAlert);
+      if (ride) {
+        io.to(`user:${ride.riderId}`).emit('ride:sos_received', sosAlert);
+        if (ride.driverId) {
+          io.to(`user:${ride.driverId}`).emit('ride:sos_received', sosAlert);
+        }
+      }
+    });
+
     // Clean up on disconnect
     socket.on('disconnect', () => {
       if (currentUserId) {
@@ -376,9 +436,159 @@ function setupSocketIO(io) {
 }
 
 /**
+ * Dispatch by ETA (OSRM): Calculate driving duration for all online drivers and dispatch sequentially
+ */
+async function dispatchRideByEta(io, ride, dispatchSessions) {
+  const onlineDrivers = db.getDrivers().filter(d => d.status === 'ONLINE');
+  const rider = db.getUserById(ride.riderId);
+  const settings = db.getSettings();
+
+  if (onlineDrivers.length === 0) {
+    // Cleanly notify rider when no drivers are currently available
+    io.to(`user:${ride.riderId}`).emit('ride:no_drivers_found', {
+      rideId: ride.id,
+      message: 'No drivers are currently online in your area. Please try again in a moment.'
+    });
+    return;
+  }
+
+  // Calculate ETA for each driver to the pickup location via OSRM
+  const etaPromises = onlineDrivers.map(async (driver) => {
+    try {
+      const route = await getDrivingRoute(driver.location, ride.pickup);
+      return {
+        driver,
+        durationMin: route.durationMin,
+        distanceKm: route.distanceKm,
+        route
+      };
+    } catch (e) {
+      return {
+        driver,
+        durationMin: 999,
+        distanceKm: 999,
+        route: null
+      };
+    }
+  });
+
+  const candidatesWithEta = await Promise.all(etaPromises);
+  // Sort ascending by ETA
+  candidatesWithEta.sort((a, b) => a.durationMin - b.durationMin);
+
+  const session = {
+    rideId: ride.id,
+    candidates: candidatesWithEta,
+    currentIndex: 0,
+    currentDriverId: null,
+    timer: null,
+    rider,
+    settings
+  };
+
+  dispatchSessions.set(ride.id, session);
+  sendIncomingRequestToCurrentCandidate(io, session, dispatchSessions);
+}
+
+/**
+ * Send incoming request with 15s acceptance window to candidate at session.currentIndex
+ */
+function sendIncomingRequestToCurrentCandidate(io, session, dispatchSessions) {
+  const { rideId, candidates, currentIndex, rider, settings } = session;
+
+  if (currentIndex >= candidates.length) {
+    // All drivers declined or timed out
+    dispatchSessions.delete(rideId);
+    const ride = db.getRideById(rideId);
+    if (ride && ride.status === 'REQUESTED') {
+      io.to(`user:${ride.riderId}`).emit('ride:no_drivers_found', {
+        rideId,
+        message: 'Nearby drivers are currently unavailable. Would you like to retry?'
+      });
+    }
+    return;
+  }
+
+  const candidate = candidates[currentIndex];
+  session.currentDriverId = candidate.driver.id;
+
+  const ride = db.getRideById(rideId);
+  if (!ride || ride.status !== 'REQUESTED') {
+    dispatchSessions.delete(rideId);
+    return;
+  }
+
+  // Notify the candidate driver
+  io.to(`user:${candidate.driver.id}`).emit('ride:incoming_request', {
+    ride,
+    rider: {
+      name: rider?.name || 'Passenger',
+      rating: rider?.rating || 4.9,
+      avatar: rider?.avatar
+    },
+    pickupDistanceKm: candidate.distanceKm,
+    pickupDurationMin: candidate.durationMin,
+    estimatedEarnings: Number((ride.fare * (1 - (settings.platformCommissionPercent || 20) / 100)).toFixed(2)),
+    timeoutSeconds: 15
+  });
+
+  // Automated IVR Voice Dispatch to driver's keypad phone
+  try {
+    ivrService.initiateKeypadDispatch({
+      driverPhone: candidate.driver.phone || '+91 98765 43210',
+      driverId: candidate.driver.id,
+      ride
+    });
+  } catch (err) {
+    console.warn('IVR automated dispatch notice:', err.message);
+  }
+
+  // Notify rider that dispatch is searching candidate
+  io.to(`user:${ride.riderId}`).emit('ride:dispatch_status', {
+    status: 'SEARCHING',
+    attempt: currentIndex + 1,
+    totalAttempts: candidates.length,
+    message: `Contacting nearest driver (${candidate.durationMin} mins away)...`
+  });
+
+  // 15-second acceptance countdown timer: if expired, failover to next candidate
+  session.timer = setTimeout(() => {
+    // Notify candidate that request timed out
+    io.to(`user:${candidate.driver.id}`).emit('ride:request_timeout', { rideId });
+    handleDriverDeclineOrTimeout(io, rideId, candidate.driver.id, dispatchSessions);
+  }, 15000);
+}
+
+/**
+ * Failover to the next nearest driver upon decline or 15s timeout
+ */
+function handleDriverDeclineOrTimeout(io, rideId, driverId, dispatchSessions) {
+  const session = dispatchSessions.get(rideId);
+  if (!session) return;
+
+  if (session.timer) {
+    clearTimeout(session.timer);
+    session.timer = null;
+  }
+
+  // Close request modal on that driver
+  io.to(`user:${driverId}`).emit('ride:request_closed', { rideId });
+
+  // Advance to next driver
+  session.currentIndex++;
+  sendIncomingRequestToCurrentCandidate(io, session, dispatchSessions);
+}
+
+/**
  * Handle Complete Ride Settlement
  */
-function completeRideWorkflow(io, rideId, driverId) {
+function completeRideWorkflow(io, rideId, driverId, activeSimulations) {
+  // Clear any running simulation for this driver
+  if (activeSimulations.has(driverId)) {
+    clearInterval(activeSimulations.get(driverId));
+    activeSimulations.delete(driverId);
+  }
+
   const ride = db.getRideById(rideId);
   const driver = db.getDriverById(driverId);
   const settings = db.getSettings();
@@ -388,11 +598,11 @@ function completeRideWorkflow(io, rideId, driverId) {
   const platformCut = Number((ride.fare * commissionRate).toFixed(2));
   const driverEarnings = Number((ride.fare - platformCut).toFixed(2));
 
-  // Update statuses
+  // Update driver stats
   db.updateDriver(driverId, {
     status: 'ONLINE',
-    earningsToday: (driver.earningsToday || 0) + driverEarnings,
-    walletBalance: (driver.walletBalance || 0) + driverEarnings,
+    earningsToday: Number(((driver.earningsToday || 0) + driverEarnings).toFixed(2)),
+    walletBalance: Number(((driver.walletBalance || 0) + driverEarnings).toFixed(2)),
     totalTrips: (driver.totalTrips || 0) + 1
   });
 
@@ -403,11 +613,11 @@ function completeRideWorkflow(io, rideId, driverId) {
     platformFee: platformCut
   });
 
-  // Rider wallet deduction if wallet payment
+  // Deduct fare from rider wallet
   const rider = db.getUserById(ride.riderId);
-  if (rider && ride.paymentMethod === 'WALLET') {
+  if (rider) {
     db.updateUser(ride.riderId, {
-      walletBalance: (rider.walletBalance || 0) - ride.fare,
+      walletBalance: Math.max(0, Number(((rider.walletBalance || 0) - ride.fare).toFixed(2))),
       totalRides: (rider.totalRides || 0) + 1
     });
 
@@ -415,11 +625,11 @@ function completeRideWorkflow(io, rideId, driverId) {
       userId: ride.riderId,
       amount: -ride.fare,
       type: 'RIDE_PAYMENT',
-      description: `Ride to ${ride.destination.address.split(',')[0]}`
+      description: `Ride to ${ride.destination.address?.split(',')[0] || 'Destination'}`
     });
   }
 
-  // Driver transaction
+  // Add driver earnings transaction
   db.addTransaction({
     userId: driverId,
     amount: driverEarnings,
@@ -427,23 +637,24 @@ function completeRideWorkflow(io, rideId, driverId) {
     description: `Trip Earnings (Fare $${ride.fare} - Platform Fee $${platformCut})`
   });
 
-  // Notify Rider
+  // Notify Rider with itemized receipt
   io.to(`user:${ride.riderId}`).emit('ride:completed', {
     ride: updatedRide,
     receipt: {
       fare: ride.fare,
       distanceKm: ride.distanceKm,
       durationMin: ride.durationMin,
+      platformFee: platformCut,
       paymentMethod: ride.paymentMethod,
       completedAt: updatedRide.completedAt
     }
   });
 
-  // Notify Driver
+  // Notify Driver with earnings confirmation
   io.to(`user:${driverId}`).emit('ride:completed_confirmation', {
     ride: updatedRide,
     earnings: driverEarnings,
-    totalToday: (driver.earningsToday || 0) + driverEarnings
+    totalToday: Number(((driver.earningsToday || 0) + driverEarnings).toFixed(2))
   });
 
   io.emit('driver:status_changed', { driverId, status: 'ONLINE' });
@@ -451,67 +662,30 @@ function completeRideWorkflow(io, rideId, driverId) {
 }
 
 /**
- * Auto-acceptance for testing / demo
- */
-async function simulateAutoDriverAcceptance(io, rideId) {
-  const ride = db.getRideById(rideId);
-  if (!ride || ride.status !== 'REQUESTED') return;
-
-  const drivers = db.getDrivers();
-  const availableDriver = drivers.find(d => d.status === 'ONLINE') || drivers[0];
-  if (!availableDriver) return;
-
-  db.updateDriver(availableDriver.id, { status: 'BUSY' });
-  const toPickupRoute = await getDrivingRoute(availableDriver.location, ride.pickup);
-
-  const updatedRide = db.updateRide(rideId, {
-    driverId: availableDriver.id,
-    status: 'ACCEPTED',
-    acceptedAt: new Date().toISOString(),
-    driverRouteCoordinates: toPickupRoute.coordinates,
-    etaToPickupMin: toPickupRoute.durationMin
-  });
-
-  io.to(`user:${ride.riderId}`).emit('ride:accepted', {
-    ride: updatedRide,
-    driver: availableDriver,
-    etaToPickupMin: toPickupRoute.durationMin
-  });
-
-  io.to(`user:${availableDriver.id}`).emit('ride:accepted_confirmation', {
-    ride: updatedRide,
-    rider: db.getUserById(ride.riderId),
-    routeToPickup: toPickupRoute
-  });
-
-  io.emit('driver:status_changed', { driverId: availableDriver.id, status: 'BUSY' });
-
-  // Move driver towards pickup
-  startDriverMovementSimulation(io, availableDriver.id, toPickupRoute.coordinates, 'TO_PICKUP', rideId);
-}
-
-/**
  * Smooth simulated driver vehicle animation along GPS route
  */
-function startDriverMovementSimulation(io, driverId, coordinates, phase, rideId) {
+function startDriverMovementSimulation(io, driverId, coordinates, phase, rideId, activeSimulations) {
   if (!coordinates || coordinates.length === 0) return;
+
+  if (activeSimulations.has(driverId)) {
+    clearInterval(activeSimulations.get(driverId));
+  }
 
   let index = 0;
   const totalSteps = coordinates.length;
-  // Interval speed: calculate step time to make trip preview realistic & engaging (10-15 seconds total)
-  const stepDelay = Math.max(400, Math.min(1200, Math.floor(12000 / totalSteps)));
+  const stepDelay = Math.max(300, Math.min(900, Math.floor(10000 / totalSteps)));
 
   const timer = setInterval(() => {
     index++;
     if (index >= totalSteps) {
       clearInterval(timer);
+      activeSimulations.delete(driverId);
       const finalCoord = coordinates[totalSteps - 1];
       db.updateDriver(driverId, {
         location: { lat: finalCoord[0], lng: finalCoord[1], heading: 0 }
       });
 
       if (phase === 'TO_PICKUP') {
-        // Driver arrives
         const ride = db.getRideById(rideId);
         if (ride && (ride.status === 'ACCEPTED' || ride.status === 'REQUESTED')) {
           const updatedRide = db.updateRide(rideId, { status: 'ARRIVED', arrivedAt: new Date().toISOString() });
@@ -522,10 +696,9 @@ function startDriverMovementSimulation(io, driverId, coordinates, phase, rideId)
           io.to(`user:${driverId}`).emit('ride:arrival_confirmed', { ride: updatedRide });
         }
       } else if (phase === 'TO_DESTINATION') {
-        // Trip completes
         const ride = db.getRideById(rideId);
         if (ride && ride.status === 'IN_PROGRESS') {
-          completeRideWorkflow(io, rideId, driverId);
+          completeRideWorkflow(io, rideId, driverId, activeSimulations);
         }
       }
       return;
@@ -556,6 +729,8 @@ function startDriverMovementSimulation(io, driverId, coordinates, phase, rideId)
       remainingMin
     });
   }, stepDelay);
+
+  activeSimulations.set(driverId, timer);
 }
 
 /**
@@ -565,9 +740,8 @@ function startIdleDriversCruising(io) {
   setInterval(() => {
     const drivers = db.getDrivers().filter(d => d.status === 'ONLINE');
     drivers.forEach(d => {
-      // Small random drift simulating cruising (approx 20-30 meters)
-      const dLat = (Math.random() - 0.5) * 0.0004;
-      const dLng = (Math.random() - 0.5) * 0.0004;
+      const dLat = (Math.random() - 0.5) * 0.0003;
+      const dLng = (Math.random() - 0.5) * 0.0003;
       const newLat = d.location.lat + dLat;
       const newLng = d.location.lng + dLng;
       const heading = calculateHeading(d.location.lat, d.location.lng, newLat, newLng);

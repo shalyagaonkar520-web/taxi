@@ -12,31 +12,47 @@ body {
   color: #f4f4f5;
   margin: 0;
   padding: 0;
+  min-height: 100dvh;
+  width: 100%;
+  overflow-x: hidden;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
 }
 
 h1, h2, h3, h4, h5, h6 {
   font-family: 'Outfit', sans-serif;
 }
 
+/* Minimum 44px touch targets */
+.touch-target {
+  min-height: 44px;
+  min-width: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 /* Custom Glassmorphism */
 .glass-panel {
-  background: rgba(18, 18, 22, 0.78);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  background: rgba(18, 18, 22, 0.88);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .glass-card {
-  background: rgba(24, 24, 30, 0.85);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(24, 24, 30, 0.88);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .glass-dropdown {
-  background: rgba(20, 20, 26, 0.95);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  background: rgba(20, 20, 26, 0.98);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
   border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
@@ -64,6 +80,8 @@ h1, h2, h3, h4, h5, h6 {
   background-color: #0b0b0e !important;
   font-family: inherit;
   z-index: 10;
+  width: 100% !important;
+  height: 100% !important;
 }
 
 .leaflet-tile {
@@ -92,8 +110,8 @@ h1, h2, h3, h4, h5, h6 {
     opacity: 1;
   }
   100% {
-    width: 140px;
-    height: 140px;
+    width: 150px;
+    height: 150px;
     opacity: 0;
   }
 }
@@ -109,4 +127,23 @@ h1, h2, h3, h4, h5, h6 {
 
 .glow-red {
   box-shadow: 0 0 25px -4px rgba(225, 25, 0, 0.45);
+}
+
+/* 15s Countdown Ring Animation */
+@keyframes ring-countdown {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: 283;
+  }
+}
+
+.animate-ring-countdown {
+  animation: ring-countdown 15s linear forwards;
+}
+
+/* Safe bottom spacing */
+.pb-safe {
+  padding-bottom: max(1rem, env(safe-area-inset-bottom, 1rem));
 }
