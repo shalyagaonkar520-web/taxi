@@ -7,14 +7,22 @@ on:
   pull_request:
     branches:
       - '**'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
   validate:
-    name: Install, build, and smoke test
+    name: Install, validate, build, and smoke test
     runs-on: ubuntu-latest
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || 'ci-test-token' }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID || '-1000000000000' }}
 
     steps:
       - name: Checkout
@@ -41,11 +49,17 @@ jobs:
         run: npm ci
         working-directory: client
 
+      - name: Validate server syntax
+        run: |
+          node --check server/src/server.js
+          node --check server/src/socket.js
+          node --check server/src/db.js
+
       - name: Build client
         run: npm run build
         working-directory: client
 
-      - name: Start server
+      - name: Start backend
         run: npm start > server.log 2>&1 &
         working-directory: server
 
@@ -56,7 +70,8 @@ jobs:
               break
             fi
             if [ "$attempt" -eq 30 ]; then
-              cat server/server.log 2>/dev/null || cat server.log
+              echo "Server failed to become healthy" >&2
+              cat server.log 2>/dev/null || true
               exit 1
             fi
             sleep 1

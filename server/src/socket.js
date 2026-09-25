@@ -1,6 +1,7 @@
 const db = require('./db');
 const { calculateHaversineDistance, calculateHeading, getDrivingRoute } = require('./services/routing');
 const { calculateFare } = require('./services/pricing');
+const { sendRideAcceptedNotification } = require('./services/telegram');
 
 function setupSocketIO(io) {
   // Connected socket mappings: userId -> socketId
@@ -211,6 +212,8 @@ function setupSocketIO(io) {
       });
 
       const rider = db.getUserById(ride.riderId);
+
+      await sendRideAcceptedNotification(updatedRide, driver, rider);
 
       // Broadcast to Rider & Driver & Admin
       io.to(`user:${ride.riderId}`).emit('ride:accepted', {
@@ -481,6 +484,10 @@ async function simulateAutoDriverAcceptance(io, rideId) {
     etaToPickupMin: toPickupRoute.durationMin
   });
 
+  const rider = db.getUserById(ride.riderId);
+
+  await sendRideAcceptedNotification(updatedRide, availableDriver, rider);
+
   io.to(`user:${ride.riderId}`).emit('ride:accepted', {
     ride: updatedRide,
     driver: availableDriver,
@@ -489,7 +496,7 @@ async function simulateAutoDriverAcceptance(io, rideId) {
 
   io.to(`user:${availableDriver.id}`).emit('ride:accepted_confirmation', {
     ride: updatedRide,
-    rider: db.getUserById(ride.riderId),
+    rider,
     routeToPickup: toPickupRoute
   });
 
