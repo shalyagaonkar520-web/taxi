@@ -11,7 +11,7 @@ function fetchJson(url, options = {}) {
         'User-Agent': 'NexRide-TaxiPlatform/1.0 (contact@nexride.app)',
         ...options.headers
       },
-      timeout: 6000
+      timeout: 1500
     }, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);
