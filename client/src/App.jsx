@@ -14,6 +14,14 @@ import { socket, registerUser } from './services/socket';
 import { fetchUsers, fetchDrivers, fetchActiveRide } from './services/api';
 import { Car, Navigation, ShieldCheck, User, Sparkles, Layers, ArrowRight } from 'lucide-react';
 
+function getRoleFromPath() {
+  const path = window.location.pathname.toLowerCase().replace(/\/+$/, '');
+  if (path === '/driver' || path.startsWith('/driver/')) return 'DRIVER';
+  if (path === '/admin' || path.startsWith('/admin/')) return 'ADMIN';
+  if (path === '/rider' || path.startsWith('/rider/')) return 'RIDER';
+  return null;
+}
+
 function RoleLauncher() {
   const navigate = useNavigate();
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -181,6 +189,18 @@ function RoleApp({ role }) {
   }, [role]);
 
   // Initial Data Load
+  // Admin Live Operations Center state
+  const [adminEntityFilter, setAdminEntityFilter] = useState('BOTH');
+  const [adminLayers, setAdminLayers] = useState({ cabs: true, riders: true, trips: true, surge: false });
+  const [selectedDriver, setSelectedDriver] = useState(null);
+  const [selectedRider, setSelectedRider] = useState(null);
+  const [adminRiders, setAdminRiders] = useState([]);
+
+  const handleAdminLayerToggle = (layerKey) => {
+    setAdminLayers((prev) => ({ ...prev, [layerKey]: !prev[layerKey] }));
+  };
+
+  // Initial Load
   useEffect(() => {
     async function initData() {
       try {
@@ -316,6 +336,14 @@ function RoleApp({ role }) {
             <LiveMap
               center={mapCenter}
               zoom={14}
+      {/* Main Content Area */}
+      <div className="relative flex-1 w-full h-full flex flex-col md:flex-row overflow-hidden">
+        
+        {/* Left Floating Interactive Panel */}
+        <div className={`z-30 w-full md:w-auto ${role === 'ADMIN' ? 'md:max-w-lg lg:max-w-xl' : 'md:max-w-md'} p-4 lg:p-6 overflow-y-auto pointer-events-auto flex flex-col justify-start`}>
+          {role === 'RIDER' && (
+            <RiderView
+              user={currentUser}
               drivers={drivers}
               pickup={mapPickup}
               destination={mapDestination}
@@ -331,6 +359,23 @@ function RoleApp({ role }) {
           {role === 'ADMIN' ? (
             <div className="relative z-20 w-full h-full overflow-y-auto p-2 md:p-6 bg-[#09090b]/80 backdrop-blur-md">
               <AdminView drivers={drivers} />
+          {role === 'ADMIN' && (
+            <div className="w-full">
+              <AdminView
+                drivers={drivers}
+                isConnected={isConnected}
+                onCenterMap={setMapCenter}
+                entityFilter={adminEntityFilter}
+                onFilterChange={setAdminEntityFilter}
+                activeLayers={adminLayers}
+                onLayerToggle={handleAdminLayerToggle}
+                selectedDriver={selectedDriver}
+                onSelectDriver={setSelectedDriver}
+                selectedRider={selectedRider}
+                onSelectRider={setSelectedRider}
+                riders={adminRiders}
+                setRiders={setAdminRiders}
+              />
             </div>
           ) : role === 'DRIVER' ? (
             <div className="relative z-20 w-full h-full pointer-events-none">
@@ -363,6 +408,25 @@ function RoleApp({ role }) {
             </div>
           )}
 
+        {/* Live Background Interactive Map */}
+        <div className="absolute inset-0 z-0">
+          <LiveMap
+            center={mapCenter}
+            zoom={14}
+            drivers={drivers}
+            pickup={mapPickup}
+            destination={mapDestination}
+            routeCoordinates={mapRoute}
+            driverRouteCoordinates={driverRoute}
+            assignedDriverId={activeRide?.driverId}
+            entityFilter={role === 'ADMIN' ? adminEntityFilter : 'BOTH'}
+            activeLayers={role === 'ADMIN' ? adminLayers : undefined}
+            onDriverClick={role === 'ADMIN' ? setSelectedDriver : undefined}
+            onRiderClick={role === 'ADMIN' ? setSelectedRider : undefined}
+            selectedDriverId={role === 'ADMIN' ? selectedDriver?.id : undefined}
+            selectedRiderId={role === 'ADMIN' ? selectedRider?.id : undefined}
+            riders={role === 'ADMIN' ? adminRiders : []}
+          />
         </div>
 
         {/* Wallet Top-Up Modal */}
