@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Navbar from './components/Navbar';
 import LiveMap from './components/Map/LiveMap';
 import RiderView from './components/Rider/RiderView';
@@ -59,6 +59,38 @@ function RoleApp({ role }) {
   const [showWalletModal, setShowWalletModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
 
+  /* ---------------- Theme ----------------
+     Rider defaults to light and can toggle. Driver and admin keep the
+     dark workspace they were designed for. */
+  const isRider = role === 'RIDER';
+  const [theme, setTheme] = useState(() => {
+    try {
+      return localStorage.getItem('nexride-theme') === 'dark' ? 'dark' : 'light';
+    } catch (e) {
+      return 'light';
+    }
+  });
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (isRider) {
+      root.classList.toggle('dark', theme === 'dark');
+    } else {
+      root.classList.add('dark');
+    }
+  }, [theme, isRider]);
+
+  const toggleTheme = useCallback(() => {
+    setTheme((prev) => {
+      const next = prev === 'dark' ? 'light' : 'dark';
+      try {
+        localStorage.setItem('nexride-theme', next);
+      } catch (e) {
+        /* private mode - the theme just will not persist */
+      }
+      return next;
+    });
+  }, []);
   // Admin Live Operations Center state
   const [adminEntityFilter, setAdminEntityFilter] = useState('BOTH');
   const [adminLayers, setAdminLayers] = useState({ cabs: true, riders: true, trips: true, surge: false });
@@ -74,13 +106,10 @@ function RoleApp({ role }) {
   useEffect(() => {
     async function initData() {
       try {
-        const [allUsers, allDrivers] = await Promise.all([
-          fetchUsers(),
-          fetchDrivers()
-        ]);
+        const [allUsers, allDrivers] = await Promise.all([fetchUsers(), fetchDrivers()]);
         setDrivers(allDrivers);
 
-        const initialUser = allUsers.find(u => u.role === role) || allUsers[0];
+        const initialUser = allUsers.find((u) => u.role === role) || allUsers[0];
         setCurrentUser(initialUser);
         registerUser(initialUser.id, role);
 
@@ -118,18 +147,14 @@ function RoleApp({ role }) {
     socket.on('driver:moved', (data) => {
       setDrivers((prev) =>
         prev.map((d) =>
-          d.id === data.driverId
-            ? { ...d, location: data.location, status: data.status || d.status }
-            : d
+          d.id === data.driverId ? { ...d, location: data.location, status: data.status || d.status } : d
         )
       );
     });
 
     // Driver status changed
     socket.on('driver:status_changed', ({ driverId, status }) => {
-      setDrivers((prev) =>
-        prev.map((d) => (d.id === driverId ? { ...d, status } : d))
-      );
+      setDrivers((prev) => prev.map((d) => (d.id === driverId ? { ...d, status } : d)));
     });
 
     return () => {
@@ -141,50 +166,96 @@ function RoleApp({ role }) {
     };
   }, [currentUser, role]);
 
-  // Handle Rider preview or trip updates
+  /**
+   * One explicit contract with RiderView:
+   *   null                    -> no ride, clear everything
+   *   { type: 'PREVIEW', … }  -> the rider is still planning
+   *   a ride object           -> a real ride is running
+   */
   const handleRiderUpdate = (data) => {
     if (!data) {
       setActiveRide(null);
       setPreviewRoute([]);
+      setPreviewPickup(null);
+      setPreviewDestination(null);
       return;
     }
-    if (data.userLocation) {
-      setMapCenter([data.userLocation.lat, data.userLocation.lng]);
-    }
-    if (data.previewRoute) {
-      setPreviewRoute(data.previewRoute);
-      setPreviewPickup(data.pickup);
-      setPreviewDestination(data.destination);
-      if (data.pickup && data.pickup.lat && !data.userLocation) {
-        setMapCenter([data.pickup.lat, data.pickup.lng]);
-      }
-    } else if (data.userLocation && !data.id) {
+
+    if (data.type === 'PREVIEW') {
       setPreviewPickup(data.pickup || null);
       setPreviewDestination(data.destination || null);
-    } else {
-      setActiveRide(data);
-      if (data.pickup && data.pickup.lat) {
-        setMapCenter([data.pickup.lat, data.pickup.lng]);
+      setPreviewRoute(data.route || []);
+      if (data.center?.lat != null) {
+        setMapCenter([data.center.lat, data.center.lng]);
       }
+      return;
+    }
+
+    setActiveRide(data);
+    if (data.pickup?.lat != null) {
+      setMapCenter([data.pickup.lat, data.pickup.lng]);
     }
   };
 
   const mapPickup = activeRide?.pickup || previewPickup;
   const mapDestination = activeRide?.destination || previewDestination;
-  const mapRoute = activeRide?.routeCoordinates || previewRoute;
-  const driverRoute = activeRide?.driverRouteCoordinates || [];
+  const mapRoute =
+    activeRide?.tripRouteCoordinates || activeRide?.routeCoordinates || previewRoute;
+  const driverRoute = activeRide?.status === 'IN_PROGRESS' ? [] : activeRide?.driverRouteCoordinates || [];
 
-  return (
-    <div className="relative w-screen h-screen flex flex-col overflow-hidden bg-[#09090b]">
-      {/* Top Navbar */}
-      <Navbar
-        currentRole={role}
-        user={currentUser}
-        walletBalance={currentUser?.walletBalance}
-        onOpenWallet={() => setShowWalletModal(true)}
-        onOpenHistory={() => setShowHistoryModal(true)}
-        isConnected={isConnected}
+  const onlineDriverCount = drivers.filter((d) => d.status === 'ONLINE').length;
+
+  const mapPanel = (
+    <>
+      <LiveMap
+        center={mapCenter}
+        zoom={14}
+        drivers={drivers}
+        pickup={mapPickup}
+        destination={mapDestination}
+        routeCoordinates={mapRoute}
+        driverRouteCoordinates={driverRoute}
+        assignedDriverId={activeRide?.driverId}
       />
+
+      {/* Floating status badge */}
+      <div className="absolute top-3 left-3 z-20 pointer-events-none flex items-center gap-2 px-3 py-2 rounded-full bg-white/90 dark:bg-black/80 backdrop-blur-md border border-slate-200 dark:border-white/15 shadow-lg text-xs font-bold text-slate-700 dark:text-gray-200">
+        <span className="w-2 h-2 rounded-full bg-uber-green animate-pulse" />
+        <span>{onlineDriverCount} drivers nearby</span>
+      </div>
+    </>
+  );
+
+  /* ---------------- Rider: map on top, details below ---------------- */
+  if (isRider) {
+    return (
+      <div className="h-[100dvh] flex flex-col overflow-hidden bg-slate-50 dark:bg-[#09090b]">
+        <Navbar
+          currentRole={role}
+          user={currentUser}
+          walletBalance={currentUser?.walletBalance}
+          onOpenWallet={() => setShowWalletModal(true)}
+          onOpenHistory={() => setShowHistoryModal(true)}
+          isConnected={isConnected}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+        />
+
+        <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
+          {/* Map: top half on a phone, right side on a desktop */}
+          <div className="relative h-[45vh] lg:h-auto shrink-0 lg:flex-1 lg:order-2">
+            {mapPanel}
+          </div>
+
+          {/* Details sheet: bottom half on a phone, left column on a desktop */}
+          <div
+            data-rider-sheet
+            className="relative z-20 flex-1 min-h-0 overflow-y-auto -mt-5 lg:mt-0 rounded-t-3xl lg:rounded-none bg-white dark:bg-[#111116] shadow-[0_-10px_30px_rgba(15,23,42,0.10)] lg:shadow-none lg:w-[430px] xl:w-[460px] lg:flex-none lg:order-1 lg:border-r lg:border-slate-200 lg:dark:border-white/10"
+          >
+            {/* grab handle, so the split reads as a sheet on mobile */}
+            <div className="lg:hidden sticky top-0 z-10 flex justify-center pt-2.5 pb-1 bg-white dark:bg-[#111116]">
+              <span className="w-10 h-1.5 rounded-full bg-slate-300 dark:bg-white/20" />
+            </div>
 
       {/* Main Content Area */}
       <div className="relative flex-1 w-full h-full flex flex-col md:flex-row overflow-hidden">
@@ -200,8 +271,40 @@ function RoleApp({ role }) {
               onOpenWallet={() => setShowWalletModal(true)}
               onOpenHistory={() => setShowHistoryModal(true)}
             />
-          )}
+          </div>
+        </div>
 
+        {showWalletModal && (
+          <WalletModal
+            user={currentUser}
+            onClose={() => setShowWalletModal(false)}
+            onBalanceUpdate={(newBalance) => {
+              setCurrentUser((prev) => ({ ...prev, walletBalance: newBalance }));
+            }}
+          />
+        )}
+
+        {showHistoryModal && (
+          <HistoryModal user={currentUser} onClose={() => setShowHistoryModal(false)} />
+        )}
+      </div>
+    );
+  }
+
+  /* ---------------- Driver / Admin workspaces (unchanged) ---------------- */
+  return (
+    <div className="relative w-screen h-screen flex flex-col overflow-hidden bg-[#09090b]">
+      <Navbar
+        currentRole={role}
+        user={currentUser}
+        walletBalance={currentUser?.walletBalance}
+        onOpenWallet={() => setShowWalletModal(true)}
+        onOpenHistory={() => setShowHistoryModal(true)}
+        isConnected={isConnected}
+      />
+
+      <div className="relative flex-1 w-full h-[calc(100vh-64px)] flex flex-col lg:flex-row items-stretch justify-between p-3 lg:p-5 gap-4 overflow-hidden">
+        <div className="z-20 w-full md:w-96 flex-shrink-0 overflow-y-auto pointer-events-auto flex flex-col">
           {role === 'DRIVER' && (
             <DriverView
               driver={currentUser}
@@ -236,6 +339,8 @@ function RoleApp({ role }) {
           )}
         </div>
 
+        <div className="relative flex-1 w-full h-full min-h-[350px] lg:min-h-0 rounded-3xl overflow-hidden border border-white/10 shadow-2xl bg-[#121216]">
+          {mapPanel}
         {/* Live Background Interactive Map */}
         <div className="absolute inset-0 z-0">
           <LiveMap
@@ -256,10 +361,8 @@ function RoleApp({ role }) {
             riders={role === 'ADMIN' ? adminRiders : []}
           />
         </div>
-
       </div>
 
-      {/* Wallet Top-Up Modal */}
       {showWalletModal && (
         <WalletModal
           user={currentUser}
@@ -270,12 +373,8 @@ function RoleApp({ role }) {
         />
       )}
 
-      {/* Past Ride History Modal */}
       {showHistoryModal && (
-        <HistoryModal
-          user={currentUser}
-          onClose={() => setShowHistoryModal(false)}
-        />
+        <HistoryModal user={currentUser} onClose={() => setShowHistoryModal(false)} />
       )}
     </div>
   );

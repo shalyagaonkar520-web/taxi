@@ -1,860 +1,1247 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import {
   MapPin,
   Navigation,
   Search,
   Clock,
   Shield,
-  CreditCard,
-  Wallet,
-  DollarSign,
   Star,
   MessageSquare,
   Phone,
-  CheckCircle,
-  AlertTriangle,
-  Send,
   X,
-  Sparkles,
-  ChevronRight,
-  Share2,
-  Lock,
+  ArrowLeft,
   ArrowRight,
-  Award,
-  Zap
+  Check,
+  CheckCircle,
+  Crosshair,
+  Map,
+  Wallet,
+  Send,
+  Loader2,
+  Users
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { searchPlaces, getFareQuotes, topupWallet, reverseGeocodePlace, relocateDrivers } from '../../services/api';
+import { searchPlaces, getFareQuotes, reverseGeocodePlace, relocateDrivers } from '../../services/api';
 import { socket } from '../../services/socket';
 import { sound } from '../../utils/audio';
+import LiveMap from '../Map/LiveMap';
+
+/* ------------------------------------------------------------------
+   Three simple choices. Each maps onto a backend fare category so the
+   server keeps working exactly as before.
+------------------------------------------------------------------- */
+const VEHICLES = [
+  {
+    key: 'BIKE',
+    category: 'UberMoto',
+    emoji: '🏍️',
+    label: 'Bike',
+    seats: '1 person',
+    note: 'Cheapest. Best in traffic.'
+  },
+  {
+    key: 'AUTO',
+    category: 'UberAuto',
+    emoji: '🛺',
+    label: 'Auto',
+    seats: '3 people',
+    note: 'Good for short trips.'
+  },
+  {
+    key: 'CAR',
+    category: 'UberGo',
+    emoji: '🚗',
+    label: 'Car',
+    seats: '4 people',
+    note: 'AC. Most comfortable.'
+  }
+];
+
+const CITY_SPEED_KMPH = 24;
+
+function distanceKm(a, b) {
+  if (!a || !b || a.lat == null || b.lat == null) return null;
+  const R = 6371;
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((a.lat * Math.PI) / 180) * Math.cos((b.lat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+function minutesFromKm(km) {
+  if (km == null) return null;
+  return Math.max(1, Math.round((km / CITY_SPEED_KMPH) * 60));
+}
+
+function placeTitle(place) {
+  if (!place) return '';
+  return place.name || (place.address || '').split(',')[0] || 'Selected place';
+}
+
+function placeSubtitle(place) {
+  if (!place) return '';
+  return place.address || '';
+}
+
+/* ------------------------------------------------------------------
+   Small shared building blocks (kept plain so nothing can overlap)
+------------------------------------------------------------------- */
+function Sheet({ children }) {
+  return <div className="sheet-rise w-full flex flex-col gap-4 p-4 sm:p-5">{children}</div>;
+}
+
+/* Full screen panels are portalled to <body>. The rider sheet sits in its own
+   stacking context, so an overlay rendered inside it would slide under the
+   navbar no matter how high its z-index is. */
+function Overlay({ children }) {
+  if (typeof document === 'undefined') return null;
+  return createPortal(children, document.body);
+}
+
+function BigButton({ children, onClick, disabled, tone = 'primary', type = 'button' }) {
+  const tones = {
+    primary: 'bg-uber-accent hover:bg-uber-accentHover text-white shadow-lg shadow-uber-accent/25',
+    green: 'bg-uber-green hover:bg-uber-greenHover text-white shadow-lg shadow-uber-green/25',
+    danger:
+      'bg-white text-uber-red border-2 border-uber-red/30 hover:bg-red-50 dark:bg-transparent dark:hover:bg-uber-red/10',
+    quiet:
+      'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-white/10 dark:text-slate-100 dark:hover:bg-white/20'
+  };
+  return (
+    <button
+      type={type}
+      onClick={onClick}
+      disabled={disabled}
+      className={`w-full rounded-2xl px-5 py-4 text-base font-extrabold transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 ${tones[tone]}`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function StepTitle({ onBack, title, subtitle }) {
+  return (
+    <div className="flex items-start gap-3">
+      {onBack && (
+        <button
+          onClick={onBack}
+          aria-label="Go back"
+          className="mt-0.5 shrink-0 w-10 h-10 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-white/10 dark:hover:bg-white/20 dark:text-white flex items-center justify-center transition-colors"
+        >
+          <ArrowLeft className="w-5 h-5" />
+        </button>
+      )}
+      <div className="min-w-0">
+        <h2 className="text-xl sm:text-2xl font-extrabold tracking-tight text-slate-900 dark:text-white">
+          {title}
+        </h2>
+        {subtitle && <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">{subtitle}</p>}
+      </div>
+    </div>
+  );
+}
+
+/* ================================================================== */
 
 export default function RiderView({
   user,
-  drivers,
+  drivers = [],
   activeRide,
   onRideUpdate,
   onOpenWallet,
   onOpenHistory
 }) {
-  // Address selection state (starts clean without pre-filling foreign cities)
-  const [pickup, setPickup] = useState({
-    name: 'Current Location',
-    address: 'Detecting your location...',
-    lat: 12.9716,
-    lng: 77.5946
-  });
+  /* ---------------- Trip building state ---------------- */
+  const [step, setStep] = useState('LOCATION'); // LOCATION | VEHICLE
+  const [pickup, setPickup] = useState(null);
   const [destination, setDestination] = useState(null);
 
   const [pickupQuery, setPickupQuery] = useState('');
   const [destQuery, setDestQuery] = useState('');
-  const [pickupSuggestions, setPickupSuggestions] = useState([]);
-  const [destSuggestions, setDestSuggestions] = useState([]);
-  const [activeInput, setActiveInput] = useState(null);
+  const [suggestions, setSuggestions] = useState([]);
+  const [activeField, setActiveField] = useState(null); // 'pickup' | 'drop'
+  const [searching, setSearching] = useState(false);
   const [locating, setLocating] = useState(false);
+  const [locationError, setLocationError] = useState('');
+
   const destInputRef = useRef(null);
+  const searchTimerRef = useRef(null);
+  const rootRef = useRef(null);
 
-  // Auto-detect location on initial load if possible
+  /* ---------------- Map pin picker ---------------- */
+  const [pickerFor, setPickerFor] = useState(null); // null | 'pickup' | 'drop'
+  const [pickerCoords, setPickerCoords] = useState([12.9716, 77.5946]);
+  const [pickerPlace, setPickerPlace] = useState(null);
+  const [pickerLoading, setPickerLoading] = useState(false);
+  const geocodeTimerRef = useRef(null);
+
+  /* ---------------- Fare / vehicle ---------------- */
+  const [quotes, setQuotes] = useState([]);
+  const [routeInfo, setRouteInfo] = useState(null);
+  const [loadingQuotes, setLoadingQuotes] = useState(false);
+  const [quoteError, setQuoteError] = useState('');
+  const [selectedVehicle, setSelectedVehicle] = useState('CAR');
+  const [paymentMethod, setPaymentMethod] = useState('WALLET');
+
+  /* ---------------- Live trip ---------------- */
+  const [acceptedDriver, setAcceptedDriver] = useState(null);
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [showChat, setShowChat] = useState(false);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState('');
+  const [unreadCount, setUnreadCount] = useState(0);
+  const chatBottomRef = useRef(null);
+
+  /* ---------------- Rating ---------------- */
+  const [completedRide, setCompletedRide] = useState(null);
+  const [rating, setRating] = useState(5);
+  const [tip, setTip] = useState(0);
+  const [feedback, setFeedback] = useState('');
+
+  const rideStatus = activeRide?.status || null;
+  const isLive = ['REQUESTED', 'ACCEPTED', 'ARRIVED', 'IN_PROGRESS'].includes(rideStatus);
+
+  /* ================= Location helpers ================= */
+
+  const pushPreview = (nextPickup, nextDestination, route, center) => {
+    if (!onRideUpdate) return;
+    onRideUpdate({
+      type: 'PREVIEW',
+      pickup: nextPickup || null,
+      destination: nextDestination || null,
+      route: route || [],
+      center: center || null
+    });
+  };
+
+  const applyPickup = async (place, { relocate = false, keepDestination = true } = {}) => {
+    setPickup(place);
+    setPickupQuery(placeTitle(place));
+    setSuggestions([]);
+    setActiveField(null);
+    if (relocate) {
+      try {
+        await relocateDrivers(place.lat, place.lng);
+      } catch (e) {
+        /* drivers stay where they are - not fatal */
+      }
+    }
+    pushPreview(place, keepDestination ? destination : null, [], { lat: place.lat, lng: place.lng });
+  };
+
+  const applyDestination = (place) => {
+    setDestination(place);
+    setDestQuery(placeTitle(place));
+    setSuggestions([]);
+    setActiveField(null);
+    pushPreview(pickup, place, []);
+  };
+
+  // Try to find the rider once, on first open.
   useEffect(() => {
-    if (navigator.geolocation && !pickupQuery) {
-      navigator.geolocation.getCurrentPosition(
-        async (pos) => {
-          const { latitude, longitude } = pos.coords;
-          try {
-            const place = await reverseGeocodePlace(latitude, longitude);
-            setPickup(place);
-            setPickupQuery(place.name || place.address);
-            await relocateDrivers(latitude, longitude);
-            if (onRideUpdate) {
-              onRideUpdate({
-                userLocation: { lat: latitude, lng: longitude },
-                pickup: place,
-                destination: null
-              });
-            }
-          } catch (e) {}
-        },
-        () => {},
-        { timeout: 5000 }
-      );
-    }
-  }, []);
-
-  // GPS Current Location Detection Button
-  const handleUseCurrentLocation = () => {
-    if (!navigator.geolocation) {
-      alert('Geolocation is not supported by your browser.');
-      return;
-    }
-
-    setLocating(true);
+    if (!navigator.geolocation) return;
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
         const { latitude, longitude } = pos.coords;
         try {
           const place = await reverseGeocodePlace(latitude, longitude);
-          setPickup(place);
-          setPickupQuery(place.name || place.address);
-          
-          // Clear any previous destination to prevent mismatched cross-city routes
-          setDestination(null);
-          setDestQuery('');
-          setRouteInfo(null);
-          setQuotes([]);
-          
-          // Relocate surrounding active drivers to user's real neighborhood
-          await relocateDrivers(latitude, longitude);
-
-          if (onRideUpdate) {
-            onRideUpdate({
-              userLocation: { lat: latitude, lng: longitude },
-              pickup: place,
-              destination: null,
-              previewRoute: []
-            });
-          }
-
-          // Auto focus destination input
-          setActiveInput('dest');
-          setTimeout(() => {
-            destInputRef.current?.focus();
-          }, 100);
+          await applyPickup(place, { relocate: true });
         } catch (e) {
-          const fallbackPlace = {
-            name: 'Current Location',
-            address: `GPS (${latitude.toFixed(4)}, ${longitude.toFixed(4)})`,
+          /* rider can still type an address */
+        }
+      },
+      () => {},
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleUseCurrentLocation = () => {
+    setLocationError('');
+    if (!navigator.geolocation) {
+      setLocationError('Your browser cannot share location. Please type the address instead.');
+      return;
+    }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const { latitude, longitude } = pos.coords;
+        let place;
+        try {
+          place = await reverseGeocodePlace(latitude, longitude);
+        } catch (e) {
+          place = {
+            name: 'My current location',
+            address: `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`,
             lat: latitude,
             lng: longitude
           };
-          setPickup(fallbackPlace);
-          setPickupQuery(fallbackPlace.name);
-          setDestination(null);
-          setDestQuery('');
-        } finally {
-          setLocating(false);
         }
-      },
-      (err) => {
-        console.warn('Geolocation error:', err);
+        // A new city means the old drop point no longer makes sense.
+        setDestination(null);
+        setDestQuery('');
+        setQuotes([]);
+        setRouteInfo(null);
+        await applyPickup(place, { relocate: true, keepDestination: false });
         setLocating(false);
-        alert('Could not access current location. Please allow browser location access permissions in your browser bar.');
+        setActiveField('drop');
+        setTimeout(() => destInputRef.current?.focus(), 120);
+      },
+      () => {
+        setLocating(false);
+        setLocationError(
+          'We could not read your location. Please allow location in your browser, or type the address.'
+        );
       },
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
   };
 
-  // Quotes and Selected Tier
-  const [quotes, setQuotes] = useState([]);
-  const [selectedTier, setSelectedTier] = useState('UberX');
-  const [routeInfo, setRouteInfo] = useState(null);
-  const [loadingQuotes, setLoadingQuotes] = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState('WALLET');
-  const [promoCode, setPromoCode] = useState('');
-  const [discountPercent, setDiscountPercent] = useState(0);
+  /* ================= Address search ================= */
 
-  // Rating & Tip Modal
-  const [rating, setRating] = useState(5);
-  const [tip, setTip] = useState(2);
-  const [feedback, setFeedback] = useState('');
-  const [showRatingModal, setShowRatingModal] = useState(false);
-  const [completedRideData, setCompletedRideData] = useState(null);
+  const handleQueryChange = (value, field) => {
+    if (field === 'pickup') setPickupQuery(value);
+    else setDestQuery(value);
+    setActiveField(field);
 
-  // In-trip Chat Drawer
-  const [showChat, setShowChat] = useState(false);
-  const [chatMessages, setChatMessages] = useState([]);
-  const [chatInput, setChatInput] = useState('');
-  const chatBottomRef = useRef(null);
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    if (value.trim().length < 2) {
+      setSuggestions([]);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    searchTimerRef.current = setTimeout(async () => {
+      try {
+        const results = await searchPlaces(value, pickup?.lat, pickup?.lng);
+        setSuggestions(Array.isArray(results) ? results : []);
+      } catch (e) {
+        setSuggestions([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 350);
+  };
 
-  // Fetch Quotes on mount or when pickup/dest changes
-  useEffect(() => {
-    if (pickup && destination && !activeRide) {
-      calculateTripQuotes();
+  /* ================= Map pin picker ================= */
+
+  const openPicker = (field) => {
+    const base = field === 'pickup' ? pickup || destination : destination || pickup;
+    const lat = base?.lat ?? 12.9716;
+    const lng = base?.lng ?? 77.5946;
+    setPickerCoords([lat, lng]);
+    setPickerPlace(null);
+    setPickerFor(field);
+    loadPickerAddress(lat, lng);
+  };
+
+  const loadPickerAddress = async (lat, lng) => {
+    setPickerLoading(true);
+    try {
+      const place = await reverseGeocodePlace(lat, lng);
+      setPickerPlace(place);
+    } catch (e) {
+      setPickerPlace({
+        name: 'Pin on map',
+        address: `${lat.toFixed(4)}, ${lng.toFixed(4)}`,
+        lat,
+        lng
+      });
+    } finally {
+      setPickerLoading(false);
+    }
+  };
+
+  const handlePickerMove = ({ lat, lng }) => {
+    setPickerCoords([lat, lng]);
+    setPickerPlace(null);
+    if (geocodeTimerRef.current) clearTimeout(geocodeTimerRef.current);
+    geocodeTimerRef.current = setTimeout(() => loadPickerAddress(lat, lng), 420);
+  };
+
+  const confirmPicker = async () => {
+    if (!pickerPlace) return;
+    if (pickerFor === 'pickup') {
+      await applyPickup(pickerPlace, { relocate: true });
     } else {
+      applyDestination(pickerPlace);
+    }
+    setPickerFor(null);
+  };
+
+  /* ================= Fare quotes ================= */
+
+  useEffect(() => {
+    if (!pickup || !destination || isLive) {
       setQuotes([]);
       setRouteInfo(null);
+      return;
     }
-  }, [pickup, destination]);
+    let cancelled = false;
+    (async () => {
+      setLoadingQuotes(true);
+      setQuoteError('');
+      try {
+        const res = await getFareQuotes(pickup, destination);
+        if (cancelled) return;
+        setQuotes(res.quotes || []);
+        setRouteInfo(res.route || null);
+        pushPreview(pickup, destination, res.route?.coordinates || []);
+      } catch (err) {
+        if (cancelled) return;
+        setQuoteError('We could not work out the price. Please check the addresses and try again.');
+      } finally {
+        if (!cancelled) setLoadingQuotes(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickup, destination, isLive]);
 
-  // Handle Socket Events for Rider
+  /* ================= Socket events ================= */
+
   useEffect(() => {
-    socket.on('ride:created', (ride) => {
-      onRideUpdate(ride);
-    });
+    const onCreated = (ride) => onRideUpdate?.(ride);
 
-    socket.on('ride:cancelled', () => {
-      onRideUpdate(null);
-    });
+    const onCancelled = () => {
+      onRideUpdate?.(null);
+      setAcceptedDriver(null);
+      setConfirmCancel(false);
+      setChatMessages([]);
+      setShowChat(false);
+      setStep('LOCATION');
+    };
 
-    socket.on('ride:accepted', (data) => {
-      onRideUpdate(data.ride);
+    const onAccepted = (data) => {
+      setAcceptedDriver(data.driver || null);
+      onRideUpdate?.(data.ride);
       sound.playDriverArrived();
-    });
+    };
 
-    socket.on('ride:driver_arrived', (data) => {
-      onRideUpdate(data.ride);
+    const onArrived = (data) => {
+      onRideUpdate?.(data.ride);
       sound.playDriverArrived();
-    });
+    };
 
-    socket.on('ride:started', (data) => {
-      onRideUpdate(data.ride);
-    });
+    const onStarted = (data) => onRideUpdate?.(data.ride);
 
-    socket.on('ride:completed', (data) => {
-      onRideUpdate(null);
-      setCompletedRideData(data);
-      setShowRatingModal(true);
+    const onCompleted = (data) => {
+      onRideUpdate?.(null);
+      setCompletedRide(data);
+      setAcceptedDriver(null);
+      setChatMessages([]);
+      setShowChat(false);
+      setStep('LOCATION');
+      setDestination(null);
+      setDestQuery('');
       sound.playTripCompleted();
-      confetti({
-        particleCount: 120,
-        spread: 70,
-        origin: { y: 0.6 }
-      });
-    });
+      confetti({ particleCount: 110, spread: 70, origin: { y: 0.6 } });
+    };
 
-    socket.on('chat:message', (msg) => {
+    const onChat = (msg) => {
       setChatMessages((prev) => [...prev, msg]);
-    });
+      if (msg.senderRole !== 'RIDER') setUnreadCount((c) => c + 1);
+    };
+
+    socket.on('ride:created', onCreated);
+    socket.on('ride:cancelled', onCancelled);
+    socket.on('ride:accepted', onAccepted);
+    socket.on('ride:driver_arrived', onArrived);
+    socket.on('ride:started', onStarted);
+    socket.on('ride:completed', onCompleted);
+    socket.on('chat:message', onChat);
 
     return () => {
-      socket.off('ride:created');
-      socket.off('ride:cancelled');
-      socket.off('ride:accepted');
-      socket.off('ride:driver_arrived');
-      socket.off('ride:started');
-      socket.off('ride:completed');
-      socket.off('chat:message');
+      socket.off('ride:created', onCreated);
+      socket.off('ride:cancelled', onCancelled);
+      socket.off('ride:accepted', onAccepted);
+      socket.off('ride:driver_arrived', onArrived);
+      socket.off('ride:started', onStarted);
+      socket.off('ride:completed', onCompleted);
+      socket.off('chat:message', onChat);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Scroll chat to bottom
   useEffect(() => {
     if (showChat) {
+      setUnreadCount(0);
       chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [chatMessages, showChat]);
 
-  // Calculate fare quotes
-  const calculateTripQuotes = async () => {
-    try {
-      setLoadingQuotes(true);
-      const res = await getFareQuotes(pickup, destination);
-      setQuotes(res.quotes || []);
-      setRouteInfo(res.route);
-      if (onRideUpdate && !activeRide) {
-        // Send preview route to parent map
-        onRideUpdate({ previewRoute: res.route?.coordinates, pickup, destination });
-      }
-    } catch (err) {
-      console.error('Failed to get quotes:', err);
-    } finally {
-      setLoadingQuotes(false);
-    }
-  };
+  // Every new screen starts at the top. Without this the sheet keeps the
+  // previous screen's scroll position and hides the new heading.
+  useEffect(() => {
+    const sheet = rootRef.current?.closest('[data-rider-sheet]');
+    if (sheet) sheet.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [step, rideStatus]);
 
-  // Autocomplete search
-  const handleSearch = async (query, type) => {
-    if (type === 'pickup') {
-      setPickupQuery(query);
-      if (query.length > 1) {
-        const results = await searchPlaces(query, pickup?.lat, pickup?.lng);
-        setPickupSuggestions(results);
-      } else {
-        setPickupSuggestions([]);
-      }
-    } else {
-      setDestQuery(query);
-      if (query.length > 1) {
-        const results = await searchPlaces(query, destination?.lat, destination?.lng);
-        setDestSuggestions(results);
-      } else {
-        setDestSuggestions([]);
-      }
-    }
-  };
+  /* ================= Derived values ================= */
 
-  const selectPlace = (place, type) => {
-    if (type === 'pickup') {
-      setPickup(place);
-      setPickupQuery(place.name || place.address);
-      setPickupSuggestions([]);
-    } else {
-      setDestination(place);
-      setDestQuery(place.name || place.address);
-      setDestSuggestions([]);
-    }
-    setActiveInput(null);
-  };
+  const onlineDrivers = useMemo(
+    () => drivers.filter((d) => d.status === 'ONLINE' && d.location?.lat),
+    [drivers]
+  );
 
-  // Request Ride
-  const handleRequestRide = () => {
+  const nearbyDrivers = useMemo(() => {
+    if (!pickup) return onlineDrivers.map((d) => ({ ...d, km: null }));
+    return onlineDrivers
+      .map((d) => ({ ...d, km: distanceKm(pickup, d.location) }))
+      .filter((d) => d.km != null && d.km <= 10)
+      .sort((a, b) => a.km - b.km);
+  }, [onlineDrivers, pickup]);
+
+  const selectedVehicleDef = VEHICLES.find((v) => v.key === selectedVehicle) || VEHICLES[2];
+
+  const quoteFor = (vehicle) => quotes.find((q) => q.id === vehicle.category) || null;
+  const selectedQuote = quoteFor(selectedVehicleDef);
+  const currency = selectedQuote?.currency || '$';
+
+  const assignedDriver =
+    (activeRide?.driverId && drivers.find((d) => d.id === activeRide.driverId)) ||
+    acceptedDriver ||
+    null;
+
+  // Live position comes from the drivers list, which the socket keeps fresh.
+  const liveDriverLocation =
+    (activeRide?.driverId && drivers.find((d) => d.id === activeRide.driverId)?.location) ||
+    acceptedDriver?.location ||
+    null;
+
+  const trackingTarget =
+    rideStatus === 'IN_PROGRESS' ? activeRide?.destination : activeRide?.pickup;
+
+  const remainingKm = distanceKm(liveDriverLocation, trackingTarget);
+  const remainingMin =
+    rideStatus === 'ARRIVED'
+      ? 0
+      : minutesFromKm(remainingKm) ?? activeRide?.etaToPickupMin ?? null;
+
+  /* ================= Actions ================= */
+
+  const handleConfirmTrip = () => {
+    if (!pickup || !destination) return;
     sound.playRideRequest();
     socket.emit('ride:request', {
       riderId: user?.id || 'rider-01',
       pickup,
       destination,
-      category: selectedTier,
+      category: selectedVehicleDef.category,
       paymentMethod
     });
   };
 
-  // Send in-trip chat message
+  const handleCancelRide = () => {
+    if (!activeRide) return;
+    socket.emit('ride:cancel', {
+      rideId: activeRide.id,
+      riderId: user?.id || 'rider-01'
+    });
+    setConfirmCancel(false);
+  };
+
   const handleSendChat = (e) => {
     e.preventDefault();
     if (!chatInput.trim() || !activeRide) return;
-
     socket.emit('chat:send', {
       rideId: activeRide.id,
       senderId: user?.id || 'rider-01',
-      senderName: user?.name || 'Passenger',
+      senderName: user?.name || 'Rider',
       senderRole: 'RIDER',
       text: chatInput.trim()
     });
     setChatInput('');
   };
 
-  // Submit Rating & Tip
   const handleSubmitRating = () => {
-    if (completedRideData?.ride?.id) {
+    if (completedRide?.ride?.id) {
       socket.emit('ride:rate_and_tip', {
-        rideId: completedRideData.ride.id,
+        rideId: completedRide.ride.id,
         riderId: user?.id || 'rider-01',
         rating,
-        tip: parseFloat(tip) || 0,
+        tip: Number(tip) || 0,
         feedback
       });
     }
-    setShowRatingModal(false);
-    setCompletedRideData(null);
+    setCompletedRide(null);
+    setRating(5);
+    setTip(0);
+    setFeedback('');
   };
 
-  const selectedQuote = quotes.find((q) => q.id === selectedTier) || quotes[0];
-  const finalFare = selectedQuote
-    ? (selectedQuote.totalFare * (1 - discountPercent / 100)).toFixed(2)
-    : '0.00';
+  /* ================= Screens ================= */
 
-  const assignedDriver = activeRide?.driverId
-    ? drivers.find((d) => d.id === activeRide.driverId) || {
-        name: 'Michael Rodriguez',
-        rating: 4.96,
-        phone: '+1 (555) 987-6543',
-        vehicle: {
-          make: 'Tesla',
-          model: 'Model 3',
-          color: 'Midnight Silver',
-          licensePlate: 'NYC-7892'
-        }
-      }
-    : null;
+  const addressField = (field) => {
+    const isPickup = field === 'pickup';
+    const value = isPickup ? pickupQuery : destQuery;
+    const chosen = isPickup ? pickup : destination;
+    const focused = activeField === field;
 
-  return (
-    <div className="w-full max-w-md flex flex-col gap-4">
-      {/* 1. NO ACTIVE RIDE: BOOKING CARD */}
-      {!activeRide && (
-        <div className="glass-card rounded-3xl p-5 shadow-2xl border border-white/10 flex flex-col gap-4 animate-in fade-in slide-in-from-bottom-4 duration-300">
-          
-          {/* Header */}
-          <div className="flex items-center justify-between">
-            <h2 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
-              <Sparkles className="w-5 h-5 text-uber-accent" />
-              Where to?
-            </h2>
-            {routeInfo && (
-              <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-white/5 border border-white/10 text-gray-300">
-                {routeInfo.distanceKm} km • ~{routeInfo.durationMin} mins
-              </span>
-            )}
+    return (
+      <div
+        className={`rounded-2xl border-2 transition-colors ${
+          focused
+            ? 'border-uber-accent bg-white dark:bg-[#16161b]'
+            : 'border-slate-200 bg-slate-50 dark:border-white/10 dark:bg-white/5'
+        }`}
+      >
+        <div className="flex items-center gap-3 px-4 py-3">
+          <span
+            className={`shrink-0 w-3.5 h-3.5 rounded-full ${
+              isPickup ? 'bg-uber-green' : 'bg-uber-red'
+            }`}
+          />
+          <div className="min-w-0 flex-1">
+            <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              {isPickup ? 'Pick up from' : 'Go to'}
+            </label>
+            <input
+              ref={isPickup ? null : destInputRef}
+              value={value}
+              onChange={(e) => handleQueryChange(e.target.value, field)}
+              onFocus={() => setActiveField(field)}
+              placeholder={isPickup ? 'Where are you now?' : 'Where do you want to go?'}
+              className="w-full bg-transparent text-base font-semibold text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none py-0.5"
+            />
           </div>
+          {value && (
+            <button
+              onClick={() => {
+                if (isPickup) {
+                  setPickup(null);
+                  setPickupQuery('');
+                } else {
+                  setDestination(null);
+                  setDestQuery('');
+                }
+                setSuggestions([]);
+                setActiveField(field);
+              }}
+              aria-label="Clear"
+              className="shrink-0 w-7 h-7 rounded-full bg-slate-200 dark:bg-white/10 text-slate-600 dark:text-slate-300 flex items-center justify-center"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
 
-          {/* Pickup & Destination Inputs */}
-          <div className="relative flex flex-col gap-2.5">
-            {/* Visual connector line */}
-            <div className="absolute left-4 top-5 bottom-5 w-0.5 bg-gradient-to-b from-uber-accent via-gray-600 to-uber-red z-0" />
+        {chosen && !focused && placeSubtitle(chosen) && (
+          <p className="px-4 pb-3 -mt-1 text-xs text-slate-500 dark:text-slate-400 truncate">
+            {placeSubtitle(chosen)}
+          </p>
+        )}
 
-            {/* Pickup */}
-            <div className="relative z-10">
-              <div className="flex items-center gap-3 bg-black/50 p-3 rounded-2xl border border-white/10 focus-within:border-uber-accent transition-all">
-                <div className="w-3 h-3 rounded-full bg-uber-accent ring-4 ring-uber-accent/20 flex-shrink-0" />
-                <input
-                  type="text"
-                  placeholder="Pickup Location"
-                  value={pickupQuery}
-                  onChange={(e) => handleSearch(e.target.value, 'pickup')}
-                  onFocus={() => setActiveInput('pickup')}
-                  className="bg-transparent text-sm font-medium text-white placeholder-gray-500 w-full focus:outline-none"
-                />
-
-                {/* Use Current Location Quick Action Button */}
-                <button
-                  type="button"
-                  onClick={handleUseCurrentLocation}
-                  disabled={locating}
-                  title="Use My Current Location"
-                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-uber-accent/20 hover:bg-uber-accent/35 text-uber-accent border border-uber-accent/30 text-[11px] font-bold flex-shrink-0 transition-all active:scale-95 shadow-sm"
-                >
-                  <Navigation className={`w-3.5 h-3.5 ${locating ? 'animate-spin' : ''}`} />
-                  <span className="hidden sm:inline">{locating ? 'Locating...' : 'Current Location'}</span>
-                </button>
-              </div>
-
-              {/* Suggestions Dropdown */}
-              {activeInput === 'pickup' && (
-                <div className="absolute top-full left-0 right-0 mt-2 glass-dropdown rounded-2xl p-2 shadow-2xl z-50 max-h-64 overflow-y-auto">
-                  
-                  {/* Top GPS Option */}
-                  <button
-                    onClick={handleUseCurrentLocation}
-                    disabled={locating}
-                    className="w-full text-left p-2.5 bg-uber-accent/15 hover:bg-uber-accent/25 border border-uber-accent/30 rounded-xl transition-all flex items-center gap-2.5 mb-1.5 group"
-                  >
-                    <div className="w-7 h-7 rounded-lg bg-uber-accent flex items-center justify-center text-white flex-shrink-0 group-hover:scale-110 transition-transform">
-                      <Navigation className={`w-3.5 h-3.5 ${locating ? 'animate-spin' : ''}`} />
-                    </div>
-                    <div>
-                      <p className="text-xs font-extrabold text-uber-accent flex items-center gap-1">
-                        Use My Current Location
-                        {locating && <span className="text-[10px] text-gray-400 font-normal">(Acquiring GPS...)</span>}
-                      </p>
-                      <p className="text-[10px] text-gray-300">Auto-detect via device GPS and find nearby drivers</p>
-                    </div>
-                  </button>
-
-                  {pickupSuggestions.map((s, idx) => (
-                    <button
-                      key={idx}
-                      onClick={() => selectPlace(s, 'pickup')}
-                      className="w-full text-left p-2.5 hover:bg-white/10 rounded-xl transition-all flex items-start gap-2.5"
-                    >
-                      <MapPin className="w-4 h-4 text-uber-accent mt-0.5 flex-shrink-0" />
-                      <div>
-                        <p className="text-xs font-bold text-white">{s.name}</p>
-                        <p className="text-[11px] text-gray-400 truncate max-w-[280px]">{s.address}</p>
-                      </div>
-                    </button>
-                  ))}
-                </div>
+        {/* Helper buttons sit inside the field block so nothing floats over text */}
+        <div className="flex flex-wrap gap-2 px-4 pb-3">
+          {isPickup && (
+            <button
+              onClick={handleUseCurrentLocation}
+              disabled={locating}
+              className="flex items-center gap-1.5 rounded-full bg-uber-accent/10 text-uber-accent px-3 py-2 text-xs font-bold hover:bg-uber-accent/20 transition-colors disabled:opacity-60"
+            >
+              {locating ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Crosshair className="w-4 h-4" />
               )}
-            </div>
+              {locating ? 'Finding you…' : 'Use my location'}
+            </button>
+          )}
+          <button
+            onClick={() => openPicker(field)}
+            className="flex items-center gap-1.5 rounded-full bg-slate-200/70 dark:bg-white/10 text-slate-700 dark:text-slate-200 px-3 py-2 text-xs font-bold hover:bg-slate-300/70 dark:hover:bg-white/20 transition-colors"
+          >
+            <Map className="w-4 h-4" />
+            Choose on map
+          </button>
+        </div>
+      </div>
+    );
+  };
 
-            {/* Destination */}
-            <div className="relative z-10">
-              <div className="flex items-center gap-3 bg-black/50 p-3 rounded-2xl border border-white/10 focus-within:border-uber-red transition-all">
-                <div className="w-3 h-3 rounded-full bg-uber-red ring-4 ring-uber-red/20 flex-shrink-0" />
-                <input
-                  ref={destInputRef}
-                  type="text"
-                  placeholder="Where are you going? (e.g. Airport, Mall, Station)"
-                  value={destQuery}
-                  onChange={(e) => handleSearch(e.target.value, 'dest')}
-                  onFocus={() => setActiveInput('dest')}
-                  className="bg-transparent text-sm font-medium text-white placeholder-gray-500 w-full focus:outline-none"
-                />
-                {destination && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDestination(null);
-                      setDestQuery('');
-                      setQuotes([]);
-                      setRouteInfo(null);
-                      if (onRideUpdate) {
-                        onRideUpdate({ pickup, destination: null, previewRoute: [] });
-                      }
-                    }}
-                    className="text-gray-400 hover:text-white p-1"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                )}
-              </div>
+  const locationScreen = (
+    <Sheet>
+      <StepTitle
+        title={`Hi ${(user?.name || 'there').split(' ')[0]} 👋`}
+        subtitle="Step 1 of 2 — tell us where to pick you up and where to go."
+      />
 
-              {/* Suggestions Dropdown */}
-              {activeInput === 'dest' && destSuggestions.length > 0 && (
-                <div className="absolute top-full left-0 right-0 mt-2 glass-dropdown rounded-2xl p-2 shadow-2xl z-50 max-h-64 overflow-y-auto">
-                  {destSuggestions.map((s, idx) => (
-                    <button
-                      key={idx}
-                      onClick={() => selectPlace(s, 'dest')}
-                      className="w-full text-left p-2.5 hover:bg-white/10 rounded-xl transition-all flex items-start gap-2.5"
-                    >
-                      <MapPin className="w-4 h-4 text-uber-red mt-0.5 flex-shrink-0" />
-                      <div>
-                        <p className="text-xs font-bold text-white">{s.name}</p>
-                        <p className="text-[11px] text-gray-400 truncate max-w-[280px]">{s.address}</p>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
+      <div className="flex flex-col gap-3">
+        {addressField('pickup')}
+        {addressField('drop')}
+      </div>
 
-          {/* Vehicle Tier Picker (Only when destination is selected) */}
-          {destination ? (
-            <div className="flex flex-col gap-2">
-              <label className="text-xs font-bold uppercase tracking-wider text-gray-400">
-                Choose a ride
-              </label>
-              
-              <div className="flex flex-col gap-2 max-h-60 overflow-y-auto pr-1">
-                {loadingQuotes ? (
-                  <div className="py-8 text-center text-xs text-gray-400 animate-pulse">
-                    Calculating real-time route & fares...
-                  </div>
-                ) : quotes.map((tier) => {
-                  const isSelected = selectedTier === tier.id;
-                  return (
-                    <div
-                      key={tier.id}
-                      onClick={() => setSelectedTier(tier.id)}
-                      className={`flex items-center justify-between p-3 rounded-2xl cursor-pointer transition-all border ${
-                        isSelected
-                          ? 'bg-uber-accent/15 border-uber-accent shadow-lg shadow-uber-accent/10'
-                          : 'bg-black/30 border-white/5 hover:bg-white/5 hover:border-white/10'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <img
-                          src={tier.image}
-                          alt={tier.name}
-                          className="w-12 h-9 object-cover rounded-lg"
-                        />
-                        <div>
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-sm font-bold text-white">{tier.name}</span>
-                            <span className="text-[10px] px-1.5 py-0.2 rounded bg-white/10 text-gray-300 font-semibold">
-                              👤 {tier.capacity}
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-gray-400">{tier.etaMin} mins away • {tier.tagline}</p>
-                        </div>
-                      </div>
+      {locationError && (
+        <p className="rounded-xl bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
+          {locationError}
+        </p>
+      )}
 
-                      <div className="text-right">
-                        <p className="text-base font-extrabold text-white">
-                          ${tier.totalFare}
-                        </p>
-                        {tier.surgeMultiplier > 1 && (
-                          <span className="text-[10px] font-bold text-uber-gold flex items-center justify-end gap-0.5">
-                            <Zap className="w-3 h-3 fill-uber-gold" /> {tier.surgeMultiplier}x Surge
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Payment & Promo */}
-              <div className="pt-2 border-t border-white/10 flex items-center justify-between gap-3 text-xs">
-                <button
-                  onClick={onOpenWallet}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-black/40 border border-white/10 hover:bg-white/5 text-gray-300 font-semibold"
-                >
-                  <Wallet className="w-3.5 h-3.5 text-uber-accent" />
-                  <span>Wallet (${Number(user?.walletBalance || 0).toFixed(2)})</span>
-                </button>
-
-                <button
-                  onClick={() => {
-                    const code = prompt('Enter Promo Code (Try "SAVE20"):');
-                    if (code && code.toUpperCase() === 'SAVE20') {
-                      setDiscountPercent(20);
-                      alert('20% Discount applied successfully!');
-                    }
-                  }}
-                  className="flex items-center gap-1 text-uber-accent hover:underline font-semibold"
-                >
-                  {discountPercent > 0 ? `🎉 ${discountPercent}% OFF` : '+ Promo Code'}
-                </button>
-              </div>
-
-              {/* Request Button */}
-              <button
-                onClick={handleRequestRide}
-                className="w-full py-4 rounded-2xl bg-gradient-to-r from-uber-accent to-blue-500 hover:from-uber-accentHover hover:to-blue-600 font-extrabold text-white text-base shadow-xl shadow-uber-accent/30 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
-              >
-                <span>Request {selectedQuote?.name || 'Ride'}</span>
-                <span className="text-sm font-normal text-blue-200">(${finalFare})</span>
-                <ArrowRight className="w-4 h-4" />
-              </button>
-            </div>
-          ) : (
-            /* Guidance when destination not yet entered */
-            <div className="flex flex-col gap-3 p-4 rounded-2xl bg-black/30 border border-white/5 text-center">
-              <div className="flex items-center justify-center gap-1.5 text-xs text-gray-400 font-medium">
-                <Navigation className="w-3.5 h-3.5 text-uber-accent" />
-                <span>Enter a destination above to see available cars & live pricing</span>
-              </div>
-
-              {/* Quick Popular Suggestions */}
-              <div className="flex flex-wrap items-center justify-center gap-1.5 pt-1">
-                {['✈️ Airport', '🚆 Train Station', '🛍️ City Mall', '🏢 Tech Park'].map((tag) => (
-                  <button
-                    key={tag}
-                    onClick={() => {
-                      const cleanName = tag.split(' ').slice(1).join(' ');
-                      handleSearch(cleanName, 'dest');
-                      setActiveInput('dest');
-                    }}
-                    className="px-2.5 py-1 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] text-gray-300 font-semibold transition-all hover:scale-105"
-                  >
-                    {tag}
-                  </button>
-                ))}
-              </div>
+      {/* Suggestions are listed in the flow, never floating on top of text */}
+      {activeField && (searching || suggestions.length > 0) && (
+        <div className="rounded-2xl border border-slate-200 dark:border-white/10 overflow-hidden">
+          {searching && (
+            <div className="flex items-center gap-2 px-4 py-3 text-sm text-slate-500 dark:text-slate-400">
+              <Loader2 className="w-4 h-4 animate-spin" /> Searching…
             </div>
           )}
+          {suggestions.map((place, i) => (
+            <button
+              key={`${place.lat}-${place.lng}-${i}`}
+              onClick={() =>
+                activeField === 'pickup'
+                  ? applyPickup(place, { relocate: true })
+                  : applyDestination(place)
+              }
+              className="w-full flex items-start gap-3 px-4 py-3 text-left hover:bg-slate-50 dark:hover:bg-white/5 border-t first:border-t-0 border-slate-100 dark:border-white/5 transition-colors"
+            >
+              <span className="mt-0.5 shrink-0 w-8 h-8 rounded-full bg-slate-100 dark:bg-white/10 flex items-center justify-center text-slate-500 dark:text-slate-300">
+                <MapPin className="w-4 h-4" />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-bold text-slate-900 dark:text-white truncate">
+                  {placeTitle(place)}
+                </span>
+                <span className="block text-xs text-slate-500 dark:text-slate-400 truncate">
+                  {placeSubtitle(place)}
+                </span>
+              </span>
+            </button>
+          ))}
         </div>
       )}
 
-      {/* 2. RIDE REQUESTED: RADAR SEARCHING STATE */}
-      {activeRide && activeRide.status === 'REQUESTED' && (
-        <div className="glass-card rounded-3xl p-6 shadow-2xl border border-white/10 flex flex-col items-center text-center gap-5 animate-in fade-in zoom-in-95">
-          <div className="relative w-24 h-24 flex items-center justify-center">
-            <div className="radar-wave" />
-            <div className="radar-wave" style={{ animationDelay: '0.6s' }} />
-            <div className="radar-wave" style={{ animationDelay: '1.2s' }} />
-            <div className="w-14 h-14 rounded-full bg-uber-accent flex items-center justify-center text-white shadow-xl glow-accent z-10">
-              <Navigation className="w-7 h-7 animate-spin" style={{ animationDuration: '4s' }} />
+      <div className="flex items-center gap-2 rounded-2xl bg-slate-50 dark:bg-white/5 px-4 py-3">
+        <Users className="w-4 h-4 text-uber-green shrink-0" />
+        <p className="text-sm text-slate-600 dark:text-slate-300">
+          <span className="font-bold text-slate-900 dark:text-white">{nearbyDrivers.length}</span>{' '}
+          {nearbyDrivers.length === 1 ? 'driver is' : 'drivers are'} near you right now
+        </p>
+      </div>
+
+      <BigButton onClick={() => setStep('VEHICLE')} disabled={!pickup || !destination}>
+        Next — choose your ride <ArrowRight className="w-5 h-5" />
+      </BigButton>
+
+      {(!pickup || !destination) && (
+        <p className="text-center text-xs text-slate-500 dark:text-slate-400 -mt-1">
+          Fill both boxes above to continue.
+        </p>
+      )}
+    </Sheet>
+  );
+
+  const vehicleScreen = (
+    <Sheet>
+      <StepTitle
+        onBack={() => setStep('LOCATION')}
+        title="Choose your ride"
+        subtitle="Step 2 of 2 — pick a vehicle, then confirm."
+      />
+
+      {/* Trip summary, always readable */}
+      <div className="rounded-2xl bg-slate-50 dark:bg-white/5 px-4 py-3 flex flex-col gap-2">
+        <div className="flex items-start gap-3">
+          <span className="mt-1.5 shrink-0 w-3 h-3 rounded-full bg-uber-green" />
+          <p className="min-w-0 text-sm font-semibold text-slate-900 dark:text-white truncate">
+            {placeTitle(pickup)}
+          </p>
+        </div>
+        <div className="flex items-start gap-3">
+          <span className="mt-1.5 shrink-0 w-3 h-3 rounded-full bg-uber-red" />
+          <p className="min-w-0 text-sm font-semibold text-slate-900 dark:text-white truncate">
+            {placeTitle(destination)}
+          </p>
+        </div>
+        {routeInfo && (
+          <p className="text-xs text-slate-500 dark:text-slate-400 pl-6">
+            About {routeInfo.distanceKm?.toFixed(1)} km · {Math.ceil(routeInfo.durationMin)} min drive
+          </p>
+        )}
+      </div>
+
+      {quoteError && (
+        <p className="rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 px-4 py-3 text-sm text-red-700 dark:text-red-200">
+          {quoteError}
+        </p>
+      )}
+
+      <div className="flex flex-col gap-3">
+        {VEHICLES.map((v) => {
+          const q = quoteFor(v);
+          const isSelected = selectedVehicle === v.key;
+          return (
+            <button
+              key={v.key}
+              onClick={() => setSelectedVehicle(v.key)}
+              className={`w-full flex items-center gap-4 rounded-2xl border-2 px-4 py-4 text-left transition-all ${
+                isSelected
+                  ? 'border-uber-accent bg-uber-accent/5 dark:bg-uber-accent/10'
+                  : 'border-slate-200 dark:border-white/10 hover:border-slate-300 dark:hover:border-white/20'
+              }`}
+            >
+              <span className="text-3xl leading-none shrink-0" aria-hidden="true">
+                {v.emoji}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-2 flex-wrap">
+                  <span className="text-base font-extrabold text-slate-900 dark:text-white">
+                    {v.label}
+                  </span>
+                  <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400">
+                    {v.seats}
+                  </span>
+                </span>
+                <span className="block text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  {v.note}
+                </span>
+              </span>
+              <span className="shrink-0 text-right">
+                {loadingQuotes ? (
+                  <Loader2 className="w-5 h-5 animate-spin text-slate-400 ml-auto" />
+                ) : q ? (
+                  <>
+                    <span className="block text-lg font-extrabold text-slate-900 dark:text-white">
+                      {q.currency}
+                      {q.totalFare.toFixed(2)}
+                    </span>
+                    <span className="block text-[11px] text-slate-500 dark:text-slate-400">
+                      {q.etaMin} min away
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-xs text-slate-400">—</span>
+                )}
+              </span>
+              {isSelected && (
+                <span className="shrink-0 w-6 h-6 rounded-full bg-uber-accent text-white flex items-center justify-center">
+                  <Check className="w-4 h-4" />
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Payment - two plain choices */}
+      <div>
+        <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
+          How will you pay?
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          {[
+            {
+              id: 'WALLET',
+              label: 'Wallet',
+              hint: `${currency}${Number(user?.walletBalance || 0).toFixed(2)}`
+            },
+            { id: 'CASH', label: 'Cash', hint: 'Pay the driver' }
+          ].map((p) => (
+            <button
+              key={p.id}
+              onClick={() => setPaymentMethod(p.id)}
+              className={`rounded-2xl border-2 px-4 py-3 text-left transition-all ${
+                paymentMethod === p.id
+                  ? 'border-uber-accent bg-uber-accent/5 dark:bg-uber-accent/10'
+                  : 'border-slate-200 dark:border-white/10'
+              }`}
+            >
+              <span className="block text-sm font-extrabold text-slate-900 dark:text-white">
+                {p.label}
+              </span>
+              <span className="block text-xs text-slate-500 dark:text-slate-400 truncate">
+                {p.hint}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <BigButton onClick={handleConfirmTrip} disabled={!selectedQuote || loadingQuotes} tone="green">
+        {selectedQuote
+          ? `Book ${selectedVehicleDef.label} · ${currency}${selectedQuote.totalFare.toFixed(2)}`
+          : 'Getting price…'}
+      </BigButton>
+    </Sheet>
+  );
+
+  const searchingScreen = (
+    <Sheet>
+      <div className="flex items-center gap-4">
+        <span className="relative shrink-0 w-12 h-12 flex items-center justify-center">
+          <span className="absolute inset-0 rounded-full bg-uber-accent/20 animate-ping" />
+          <span className="relative w-12 h-12 rounded-full bg-uber-accent/15 text-uber-accent flex items-center justify-center">
+            <Search className="w-6 h-6" />
+          </span>
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-xl font-extrabold text-slate-900 dark:text-white">
+            Looking for a driver…
+          </h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            We are asking {nearbyDrivers.length}{' '}
+            {nearbyDrivers.length === 1 ? 'driver' : 'drivers'} near you.
+          </p>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 dark:border-white/10 overflow-hidden">
+        {nearbyDrivers.slice(0, 4).map((d, i) => (
+          <div
+            key={d.id}
+            className="flex items-center gap-3 px-4 py-3 border-t first:border-t-0 border-slate-100 dark:border-white/5"
+          >
+            <img
+              src={d.avatar}
+              alt=""
+              className="w-9 h-9 rounded-full object-cover shrink-0 bg-slate-200"
+            />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                {d.name}
+              </p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                {d.km != null ? `${d.km.toFixed(1)} km away · ${minutesFromKm(d.km)} min` : 'Nearby'}
+              </p>
+            </div>
+            <span
+              className="shrink-0 text-[11px] font-bold text-uber-accent animate-pulse"
+              style={{ animationDelay: `${i * 220}ms` }}
+            >
+              Ringing…
+            </span>
+          </div>
+        ))}
+        {nearbyDrivers.length === 0 && (
+          <p className="px-4 py-4 text-sm text-slate-500 dark:text-slate-400">
+            No driver has answered yet. Please wait a moment.
+          </p>
+        )}
+      </div>
+
+      <div className="rounded-2xl bg-slate-50 dark:bg-white/5 px-4 py-3 flex items-center justify-between gap-3">
+        <span className="min-w-0 text-sm text-slate-600 dark:text-slate-300 truncate">
+          {selectedVehicleDef.emoji} {selectedVehicleDef.label} to{' '}
+          {placeTitle(activeRide?.destination)}
+        </span>
+        <span className="shrink-0 text-sm font-extrabold text-slate-900 dark:text-white">
+          {currency}
+          {Number(activeRide?.fare || 0).toFixed(2)}
+        </span>
+      </div>
+
+      <BigButton tone="danger" onClick={handleCancelRide}>
+        Cancel
+      </BigButton>
+    </Sheet>
+  );
+
+  const driverPanel = (
+    <Sheet>
+      {/* Status line - the one thing the rider must read */}
+      <div className="flex items-center gap-3">
+        <span
+          className={`shrink-0 w-11 h-11 rounded-full flex items-center justify-center ${
+            rideStatus === 'IN_PROGRESS'
+              ? 'bg-uber-accent/15 text-uber-accent'
+              : 'bg-uber-green/15 text-uber-green'
+          }`}
+        >
+          {rideStatus === 'IN_PROGRESS' ? (
+            <Navigation className="w-5 h-5" />
+          ) : (
+            <Clock className="w-5 h-5" />
+          )}
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-xl font-extrabold text-slate-900 dark:text-white truncate">
+            {rideStatus === 'ARRIVED'
+              ? 'Your driver is here'
+              : rideStatus === 'IN_PROGRESS'
+              ? 'On the way to your drop'
+              : 'Your driver is coming'}
+          </h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            {rideStatus === 'ARRIVED'
+              ? 'Please come out and meet your driver.'
+              : remainingMin != null
+              ? `About ${remainingMin} ${remainingMin === 1 ? 'minute' : 'minutes'} away`
+              : 'Working out the time…'}
+          </p>
+        </div>
+      </div>
+
+      {/* Start PIN */}
+      {activeRide?.otp && rideStatus !== 'IN_PROGRESS' && (
+        <div className="rounded-2xl bg-uber-accent/10 border border-uber-accent/25 px-4 py-3 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs font-bold uppercase tracking-wider text-uber-accent">Start PIN</p>
+            <p className="text-sm text-slate-600 dark:text-slate-300">Tell this to your driver</p>
+          </div>
+          <p className="shrink-0 text-2xl font-black tracking-[0.3em] text-slate-900 dark:text-white">
+            {activeRide.otp}
+          </p>
+        </div>
+      )}
+
+      {/* Driver details */}
+      {assignedDriver && (
+        <div className="rounded-2xl border border-slate-200 dark:border-white/10 p-4 flex flex-col gap-4">
+          <div className="flex items-center gap-3">
+            <img
+              src={assignedDriver.avatar}
+              alt=""
+              className="w-14 h-14 rounded-2xl object-cover shrink-0 bg-slate-200"
+            />
+            <div className="min-w-0 flex-1">
+              <p className="text-base font-extrabold text-slate-900 dark:text-white truncate">
+                {assignedDriver.name}
+              </p>
+              <p className="flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
+                <Star className="w-3.5 h-3.5 fill-uber-gold text-uber-gold shrink-0" />
+                {assignedDriver.rating || '4.9'}
+                {assignedDriver.totalTrips ? ` · ${assignedDriver.totalTrips} trips` : ''}
+              </p>
             </div>
           </div>
 
-          <div>
-            <h3 className="text-lg font-bold text-white">Connecting with nearby drivers...</h3>
-            <p className="text-xs text-gray-400 mt-1 max-w-xs">
-              Dispatching your {activeRide.category} request to top-rated drivers near {activeRide.pickup.address.split(',')[0]}
+          {assignedDriver.vehicle && (
+            <div className="rounded-xl bg-slate-50 dark:bg-white/5 px-4 py-3 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                  {assignedDriver.vehicle.color} {assignedDriver.vehicle.make}{' '}
+                  {assignedDriver.vehicle.model}
+                </p>
+                <p className="text-xs text-slate-500 dark:text-slate-400">Look for this vehicle</p>
+              </div>
+              <span className="shrink-0 rounded-lg bg-slate-900 dark:bg-white px-3 py-1.5 text-sm font-black tracking-wider text-white dark:text-slate-900">
+                {assignedDriver.vehicle.licensePlate}
+              </span>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-3">
+            <a
+              href={`tel:${assignedDriver.phone || ''}`}
+              className="flex items-center justify-center gap-2 rounded-xl bg-uber-green text-white px-4 py-3 text-sm font-extrabold hover:bg-uber-greenHover transition-colors"
+            >
+              <Phone className="w-4 h-4" /> Call
+            </a>
+            <button
+              onClick={() => setShowChat(true)}
+              className="relative flex items-center justify-center gap-2 rounded-xl bg-slate-100 dark:bg-white/10 text-slate-800 dark:text-white px-4 py-3 text-sm font-extrabold hover:bg-slate-200 dark:hover:bg-white/20 transition-colors"
+            >
+              <MessageSquare className="w-4 h-4" /> Message
+              {unreadCount > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 min-w-5 h-5 px-1.5 rounded-full bg-uber-red text-white text-[11px] font-black flex items-center justify-center">
+                  {unreadCount}
+                </span>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Trip summary */}
+      <div className="rounded-2xl bg-slate-50 dark:bg-white/5 px-4 py-3 flex flex-col gap-2">
+        <div className="flex items-start gap-3">
+          <span className="mt-1.5 shrink-0 w-3 h-3 rounded-full bg-uber-green" />
+          <p className="min-w-0 text-sm text-slate-700 dark:text-slate-200 truncate">
+            {placeTitle(activeRide?.pickup)}
+          </p>
+        </div>
+        <div className="flex items-start gap-3">
+          <span className="mt-1.5 shrink-0 w-3 h-3 rounded-full bg-uber-red" />
+          <p className="min-w-0 text-sm text-slate-700 dark:text-slate-200 truncate">
+            {placeTitle(activeRide?.destination)}
+          </p>
+        </div>
+        <div className="flex items-center justify-between gap-3 pt-2 border-t border-slate-200 dark:border-white/10">
+          <span className="text-xs text-slate-500 dark:text-slate-400">
+            {activeRide?.paymentMethod === 'CASH' ? 'Pay cash' : 'Paid from wallet'}
+          </span>
+          <span className="text-base font-extrabold text-slate-900 dark:text-white">
+            {currency}
+            {Number(activeRide?.fare || 0).toFixed(2)}
+          </span>
+        </div>
+      </div>
+
+      {/* Cancel */}
+      {rideStatus !== 'IN_PROGRESS' &&
+        (confirmCancel ? (
+          <div className="rounded-2xl border-2 border-uber-red/30 p-4 flex flex-col gap-3">
+            <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+              Cancel this ride? Your driver is already on the way.
             </p>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => setConfirmCancel(false)}
+                className="rounded-xl bg-slate-100 dark:bg-white/10 px-4 py-3 text-sm font-extrabold text-slate-800 dark:text-white"
+              >
+                Keep ride
+              </button>
+              <button
+                onClick={handleCancelRide}
+                className="rounded-xl bg-uber-red px-4 py-3 text-sm font-extrabold text-white"
+              >
+                Yes, cancel
+              </button>
+            </div>
           </div>
+        ) : (
+          <BigButton tone="danger" onClick={() => setConfirmCancel(true)}>
+            Cancel ride
+          </BigButton>
+        ))}
 
-          <div className="w-full bg-black/40 p-3 rounded-2xl border border-white/10 flex items-center justify-between text-xs">
-            <span className="text-gray-400">Estimated Fare</span>
-            <span className="text-white font-extrabold">${activeRide.fare}</span>
-          </div>
+      <p className="flex items-center justify-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+        <Shield className="w-3.5 h-3.5 text-uber-green" /> Your trip is being tracked for safety
+      </p>
+    </Sheet>
+  );
 
+  /* ================= Render ================= */
+
+  let body;
+  if (rideStatus === 'REQUESTED') body = searchingScreen;
+  else if (['ACCEPTED', 'ARRIVED', 'IN_PROGRESS'].includes(rideStatus)) body = driverPanel;
+  else if (step === 'VEHICLE') body = vehicleScreen;
+  else body = locationScreen;
+
+  return (
+    <div className="w-full" ref={rootRef}>
+      {body}
+
+      {/* Quick links, only while planning a trip */}
+      {!isLive && (
+        <div className="flex items-center justify-center gap-2 px-4 pb-6">
           <button
-            onClick={() => socket.emit('ride:cancel', {
-              rideId: activeRide.id,
-              riderId: user?.id || 'rider-01'
-            })}
-            className="text-xs text-gray-400 hover:text-uber-red font-semibold transition-colors"
+            onClick={onOpenWallet}
+            className="flex items-center gap-1.5 rounded-full bg-slate-100 dark:bg-white/10 px-4 py-2 text-xs font-bold text-slate-700 dark:text-slate-200"
           >
-            Cancel Request
+            <Wallet className="w-4 h-4" /> Wallet
+          </button>
+          <button
+            onClick={onOpenHistory}
+            className="flex items-center gap-1.5 rounded-full bg-slate-100 dark:bg-white/10 px-4 py-2 text-xs font-bold text-slate-700 dark:text-slate-200"
+          >
+            <Clock className="w-4 h-4" /> My rides
           </button>
         </div>
       )}
 
-      {/* 3. ACTIVE TRIP IN PROGRESS / DRIVER DISPATCHED */}
-      {activeRide && ['ACCEPTED', 'ARRIVED', 'IN_PROGRESS'].includes(activeRide.status) && (
-        <div className="glass-card rounded-3xl p-5 shadow-2xl border border-white/10 flex flex-col gap-4 animate-in slide-in-from-bottom-4">
-          
-          {/* Status Badge */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="relative flex h-3 w-3">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-uber-green opacity-75" />
-                <span className="relative inline-flex rounded-full h-3 w-3 bg-uber-green" />
-              </span>
-              <span className="text-xs font-bold uppercase tracking-wider text-uber-green">
-                {activeRide.status === 'ACCEPTED' && 'Driver Dispatched'}
-                {activeRide.status === 'ARRIVED' && 'Driver Arrived!'}
-                {activeRide.status === 'IN_PROGRESS' && 'On Trip to Destination'}
-              </span>
-            </div>
-
-            {/* Security PIN Box */}
-            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-black/60 border border-white/15">
-              <Lock className="w-3.5 h-3.5 text-uber-gold" />
-              <span className="text-xs text-gray-400">PIN:</span>
-              <span className="text-sm font-extrabold text-white tracking-widest">{activeRide.otp || '4821'}</span>
-            </div>
-          </div>
-
-          {/* Driver Card */}
-          {assignedDriver && (
-            <div className="flex items-center justify-between p-3.5 rounded-2xl bg-black/40 border border-white/10">
-              <div className="flex items-center gap-3">
-                <img
-                  src={assignedDriver.avatar || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=120&auto=format&fit=crop&q=80'}
-                  alt={assignedDriver.name}
-                  className="w-12 h-12 rounded-2xl object-cover ring-2 ring-white/15"
-                />
-                <div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-sm font-bold text-white">{assignedDriver.name}</span>
-                    <span className="flex items-center text-xs font-bold text-uber-gold">
-                      ★ {assignedDriver.rating || 4.96}
-                    </span>
-                  </div>
-                  <p className="text-xs text-gray-300 font-semibold mt-0.5">
-                    {assignedDriver.vehicle?.make} {assignedDriver.vehicle?.model} • {assignedDriver.vehicle?.color}
-                  </p>
-                  <span className="inline-block mt-1 text-[11px] font-extrabold px-2 py-0.5 rounded bg-white/10 text-white border border-white/20">
-                    {assignedDriver.vehicle?.licensePlate || 'NYC-7892'}
-                  </span>
-                </div>
-              </div>
-
-              {/* Action Buttons: Chat & Call */}
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setShowChat(!showChat)}
-                  className="p-2.5 rounded-xl bg-uber-accent/20 hover:bg-uber-accent/30 text-uber-accent border border-uber-accent/30 transition-all relative"
-                >
-                  <MessageSquare className="w-4 h-4" />
-                  {chatMessages.length > 0 && (
-                    <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-uber-accent ring-2 ring-black" />
-                  )}
-                </button>
-                <a
-                  href={`tel:${assignedDriver.phone}`}
-                  className="p-2.5 rounded-xl bg-uber-green/20 hover:bg-uber-green/30 text-uber-green border border-uber-green/30 transition-all"
-                >
-                  <Phone className="w-4 h-4" />
-                </a>
-              </div>
-            </div>
-          )}
-
-          {/* Trip Summary Card */}
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            <div className="bg-black/30 p-2.5 rounded-xl border border-white/5">
-              <span className="text-gray-400">Pickup</span>
-              <p className="text-white font-bold truncate mt-0.5">{activeRide.pickup.address}</p>
-            </div>
-            <div className="bg-black/30 p-2.5 rounded-xl border border-white/5">
-              <span className="text-gray-400">Destination</span>
-              <p className="text-white font-bold truncate mt-0.5">{activeRide.destination.address}</p>
-            </div>
-          </div>
-
-          {/* Safety & Share Row */}
-          <div className="flex items-center justify-between text-xs text-gray-400 pt-1">
-            <button
-              onClick={() => alert('🚨 Safety alert triggered. Emergency contacts & 911 notified.')}
-              className="flex items-center gap-1.5 text-uber-red hover:underline font-bold"
-            >
-              <Shield className="w-3.5 h-3.5" />
-              <span>SOS Emergency</span>
-            </button>
-
-            <button
-              onClick={() => {
-                navigator.clipboard?.writeText?.(window.location.href);
-                alert('Trip tracking link copied to clipboard!');
-              }}
-              className="flex items-center gap-1 hover:text-white transition-colors"
-            >
-              <Share2 className="w-3.5 h-3.5" />
-              <span>Share Trip</span>
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* IN-TRIP CHAT DRAWER */}
+      {/* ---------- Message drawer ---------- */}
       {showChat && (
-        <div className="glass-card rounded-3xl p-4 border border-white/10 flex flex-col gap-3 shadow-2xl animate-in slide-in-from-bottom-2">
-          <div className="flex items-center justify-between border-b border-white/10 pb-2">
-            <div className="flex items-center gap-2">
-              <MessageSquare className="w-4 h-4 text-uber-accent" />
-              <span className="text-xs font-bold text-white">Chat with Driver</span>
+        <Overlay>
+        <div className="fixed inset-0 z-[60] bg-black/40 flex items-end sm:items-center justify-center p-0 sm:p-4">
+          <div className="w-full sm:max-w-md h-[75vh] sm:h-[70vh] bg-white dark:bg-[#16161b] rounded-t-3xl sm:rounded-3xl flex flex-col overflow-hidden shadow-2xl">
+            <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-slate-200 dark:border-white/10">
+              <p className="min-w-0 text-base font-extrabold text-slate-900 dark:text-white truncate">
+                {assignedDriver?.name || 'Your driver'}
+              </p>
+              <button
+                onClick={() => setShowChat(false)}
+                aria-label="Close messages"
+                className="shrink-0 w-9 h-9 rounded-full bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-slate-300 flex items-center justify-center"
+              >
+                <X className="w-5 h-5" />
+              </button>
             </div>
-            <button onClick={() => setShowChat(false)} className="text-gray-400 hover:text-white">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
 
-          <div className="h-44 overflow-y-auto flex flex-col gap-2 p-1 text-xs">
-            {chatMessages.length === 0 ? (
-              <div className="text-center text-gray-500 my-auto">
-                No messages yet. Send a quick note to your driver!
-              </div>
-            ) : (
-              chatMessages.map((m) => {
-                const isMe = m.senderRole === 'RIDER';
+            <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-2">
+              {chatMessages.length === 0 && (
+                <p className="text-center text-sm text-slate-500 dark:text-slate-400 mt-6">
+                  Send a message to your driver.
+                </p>
+              )}
+              {chatMessages.map((m) => {
+                const mine = m.senderRole === 'RIDER';
                 return (
-                  <div
-                    key={m.id}
-                    className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}
-                  >
-                    <div
-                      className={`max-w-[80%] px-3 py-2 rounded-2xl text-xs font-medium ${
-                        isMe
-                          ? 'bg-uber-accent text-white rounded-br-none'
-                          : 'bg-white/10 text-gray-200 rounded-bl-none'
+                  <div key={m.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
+                    <p
+                      className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm break-words ${
+                        mine
+                          ? 'bg-uber-accent text-white'
+                          : 'bg-slate-100 dark:bg-white/10 text-slate-900 dark:text-white'
                       }`}
                     >
                       {m.text}
-                    </div>
-                    <span className="text-[9px] text-gray-500 mt-0.5">{m.senderName}</span>
+                    </p>
                   </div>
                 );
-              })
-            )}
-            <div ref={chatBottomRef} />
-          </div>
+              })}
+              <div ref={chatBottomRef} />
+            </div>
 
-          <form onSubmit={handleSendChat} className="flex gap-2">
-            <input
-              type="text"
-              placeholder="Type message..."
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              className="flex-1 bg-black/50 px-3 py-2 rounded-xl text-xs text-white border border-white/10 focus:outline-none focus:border-uber-accent"
-            />
-            <button
-              type="submit"
-              className="px-3 py-2 bg-uber-accent hover:bg-uber-accentHover text-white rounded-xl text-xs font-bold"
+            <form
+              onSubmit={handleSendChat}
+              className="flex items-center gap-2 px-4 py-3 border-t border-slate-200 dark:border-white/10"
             >
-              <Send className="w-3.5 h-3.5" />
-            </button>
-          </form>
+              <input
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                placeholder="Type a message…"
+                className="flex-1 min-w-0 rounded-full bg-slate-100 dark:bg-white/10 px-4 py-3 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 outline-none"
+              />
+              <button
+                type="submit"
+                aria-label="Send"
+                className="shrink-0 w-11 h-11 rounded-full bg-uber-accent text-white flex items-center justify-center"
+              >
+                <Send className="w-5 h-5" />
+              </button>
+            </form>
+          </div>
         </div>
+        </Overlay>
       )}
 
-      {/* 4. RATING & TIP MODAL AFTER COMPLETED TRIP */}
-      {showRatingModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="glass-card max-w-sm w-full rounded-3xl p-6 border border-white/15 shadow-2xl flex flex-col gap-5 text-center animate-in zoom-in-95">
-            <div className="w-16 h-16 rounded-full bg-uber-green/20 text-uber-green mx-auto flex items-center justify-center">
-              <CheckCircle className="w-9 h-9" />
+      {/* ---------- Rating ---------- */}
+      {completedRide && (
+        <Overlay>
+        <div className="fixed inset-0 z-[70] bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4 overflow-y-auto">
+          <div className="w-full sm:max-w-md bg-white dark:bg-[#16161b] rounded-t-3xl sm:rounded-3xl p-5 flex flex-col gap-4 shadow-2xl">
+            <div className="flex items-center gap-3">
+              <span className="shrink-0 w-11 h-11 rounded-full bg-uber-green/15 text-uber-green flex items-center justify-center">
+                <CheckCircle className="w-6 h-6" />
+              </span>
+              <div className="min-w-0">
+                <h3 className="text-xl font-extrabold text-slate-900 dark:text-white">
+                  You have arrived
+                </h3>
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  Trip finished. Thanks for riding.
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-2xl bg-slate-50 dark:bg-white/5 px-4 py-3 flex items-center justify-between gap-3">
+              <span className="text-sm text-slate-600 dark:text-slate-300">Total paid</span>
+              <span className="text-2xl font-black text-slate-900 dark:text-white">
+                {currency}
+                {Number(completedRide.receipt?.fare || 0).toFixed(2)}
+              </span>
             </div>
 
             <div>
-              <h3 className="text-xl font-bold text-white">Trip Completed!</h3>
-              <p className="text-xs text-gray-400 mt-1">
-                You've arrived safely at your destination.
+              <p className="text-sm font-bold text-slate-900 dark:text-white mb-2">
+                How was your driver?
               </p>
-            </div>
-
-            {/* Receipt Breakdown */}
-            <div className="bg-black/50 p-4 rounded-2xl border border-white/10 text-xs flex flex-col gap-2">
-              <div className="flex justify-between text-gray-400">
-                <span>Trip Fare</span>
-                <span className="text-white font-bold">${completedRideData?.receipt?.fare || '24.50'}</span>
-              </div>
-              <div className="flex justify-between text-gray-400">
-                <span>Payment</span>
-                <span className="text-white font-semibold">{completedRideData?.receipt?.paymentMethod || 'In-App Wallet'}</span>
-              </div>
-            </div>
-
-            {/* Star Rating */}
-            <div>
-              <label className="text-xs font-bold uppercase tracking-wider text-gray-400 block mb-2">
-                Rate your driver
-              </label>
-              <div className="flex justify-center gap-2">
-                {[1, 2, 3, 4, 5].map((star) => (
-                  <button
-                    key={star}
-                    onClick={() => setRating(star)}
-                    className="p-1 hover:scale-125 transition-transform"
-                  >
+              <div className="flex items-center gap-2">
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <button key={n} onClick={() => setRating(n)} aria-label={`${n} stars`}>
                     <Star
-                      className={`w-7 h-7 ${
-                        star <= rating
+                      className={`w-9 h-9 ${
+                        n <= rating
                           ? 'fill-uber-gold text-uber-gold'
-                          : 'text-gray-600'
+                          : 'text-slate-300 dark:text-slate-600'
                       }`}
                     />
                   </button>
@@ -862,46 +1249,102 @@ export default function RiderView({
               </div>
             </div>
 
-            {/* Driver Tip */}
             <div>
-              <label className="text-xs font-bold uppercase tracking-wider text-gray-400 block mb-2">
-                Add a driver tip
-              </label>
+              <p className="text-sm font-bold text-slate-900 dark:text-white mb-2">
+                Add a tip? (optional)
+              </p>
               <div className="grid grid-cols-4 gap-2">
-                {[0, 2, 5, 10].map((amount) => (
+                {[0, 1, 2, 5].map((amt) => (
                   <button
-                    key={amount}
-                    onClick={() => setTip(amount)}
-                    className={`py-2 rounded-xl text-xs font-bold border transition-all ${
-                      tip === amount
-                        ? 'bg-uber-accent text-white border-uber-accent shadow-md'
-                        : 'bg-black/40 text-gray-300 border-white/10 hover:bg-white/5'
+                    key={amt}
+                    onClick={() => setTip(amt)}
+                    className={`rounded-xl px-2 py-3 text-sm font-extrabold border-2 transition-all ${
+                      tip === amt
+                        ? 'border-uber-accent bg-uber-accent/5 text-uber-accent'
+                        : 'border-slate-200 dark:border-white/10 text-slate-700 dark:text-slate-200'
                     }`}
                   >
-                    {amount === 0 ? 'No Tip' : `$${amount}`}
+                    {amt === 0 ? 'No tip' : `${currency}${amt}`}
                   </button>
                 ))}
               </div>
             </div>
 
-            {/* Feedback Input */}
             <input
-              type="text"
-              placeholder="Leave a compliment or note (optional)..."
               value={feedback}
               onChange={(e) => setFeedback(e.target.value)}
-              className="bg-black/50 px-3.5 py-2.5 rounded-xl text-xs text-white border border-white/10 focus:outline-none focus:border-uber-accent"
+              placeholder="Anything to say? (optional)"
+              className="w-full rounded-xl bg-slate-100 dark:bg-white/10 px-4 py-3 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 outline-none"
             />
 
-            {/* Submit */}
-            <button
-              onClick={handleSubmitRating}
-              className="w-full py-3.5 rounded-2xl bg-uber-accent hover:bg-uber-accentHover font-extrabold text-white text-sm shadow-xl shadow-uber-accent/30 transition-all"
-            >
-              Done & Submit
-            </button>
+            <BigButton tone="green" onClick={handleSubmitRating}>
+              Done
+            </BigButton>
           </div>
         </div>
+        </Overlay>
+      )}
+
+      {/* ---------- Map pin picker ---------- */}
+      {pickerFor && (
+        <Overlay>
+        <div className="fixed inset-0 z-[80] bg-white dark:bg-[#09090b] flex flex-col">
+          <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-200 dark:border-white/10">
+            <button
+              onClick={() => setPickerFor(null)}
+              aria-label="Go back"
+              className="shrink-0 w-10 h-10 rounded-full bg-slate-100 dark:bg-white/10 text-slate-700 dark:text-white flex items-center justify-center"
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+            <div className="min-w-0">
+              <p className="text-base font-extrabold text-slate-900 dark:text-white">
+                {pickerFor === 'pickup' ? 'Set your pickup point' : 'Set your drop point'}
+              </p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Move the map so the pin sits on the right spot.
+              </p>
+            </div>
+          </div>
+
+          <div className="relative flex-1">
+            <LiveMap
+              center={pickerCoords}
+              zoom={16}
+              isPickerMode
+              pickerType={pickerFor === 'pickup' ? 'pickup' : 'dest'}
+              onPickerCenterChange={handlePickerMove}
+            />
+          </div>
+
+          <div className="px-4 py-4 border-t border-slate-200 dark:border-white/10 flex flex-col gap-3">
+            <div className="flex items-start gap-3 min-h-[44px]">
+              <span className="mt-1 shrink-0 w-8 h-8 rounded-full bg-slate-100 dark:bg-white/10 flex items-center justify-center text-slate-500 dark:text-slate-300">
+                <MapPin className="w-4 h-4" />
+              </span>
+              <div className="min-w-0">
+                {pickerLoading || !pickerPlace ? (
+                  <p className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 pt-1.5">
+                    <Loader2 className="w-4 h-4 animate-spin" /> Reading the address…
+                  </p>
+                ) : (
+                  <>
+                    <p className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                      {placeTitle(pickerPlace)}
+                    </p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 line-clamp-2">
+                      {placeSubtitle(pickerPlace)}
+                    </p>
+                  </>
+                )}
+              </div>
+            </div>
+            <BigButton onClick={confirmPicker} disabled={!pickerPlace || pickerLoading}>
+              {pickerFor === 'pickup' ? 'Confirm pickup' : 'Confirm drop'}
+            </BigButton>
+          </div>
+        </div>
+        </Overlay>
       )}
     </div>
   );
