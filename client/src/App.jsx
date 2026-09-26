@@ -10,10 +10,10 @@ import { socket, registerUser } from './services/socket';
 import { fetchUsers, fetchDrivers, fetchActiveRide } from './services/api';
 
 function getRoleFromPath() {
-  const path = window.location.pathname.toLowerCase();
-  if (path === '/driver') return 'DRIVER';
-  if (path === '/admin') return 'ADMIN';
-  if (path === '/rider') return 'RIDER';
+  const path = window.location.pathname.toLowerCase().replace(/\/+$/, '');
+  if (path === '/driver' || path.startsWith('/driver/')) return 'DRIVER';
+  if (path === '/admin' || path.startsWith('/admin/')) return 'ADMIN';
+  if (path === '/rider' || path.startsWith('/rider/')) return 'RIDER';
   return null;
 }
 
@@ -58,6 +58,17 @@ function RoleApp({ role }) {
   // Modals
   const [showWalletModal, setShowWalletModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
+
+  // Admin Live Operations Center state
+  const [adminEntityFilter, setAdminEntityFilter] = useState('BOTH');
+  const [adminLayers, setAdminLayers] = useState({ cabs: true, riders: true, trips: true, surge: false });
+  const [selectedDriver, setSelectedDriver] = useState(null);
+  const [selectedRider, setSelectedRider] = useState(null);
+  const [adminRiders, setAdminRiders] = useState([]);
+
+  const handleAdminLayerToggle = (layerKey) => {
+    setAdminLayers((prev) => ({ ...prev, [layerKey]: !prev[layerKey] }));
+  };
 
   // Initial Load
   useEffect(() => {
@@ -179,7 +190,7 @@ function RoleApp({ role }) {
       <div className="relative flex-1 w-full h-full flex flex-col md:flex-row overflow-hidden">
         
         {/* Left Floating Interactive Panel */}
-        <div className="z-30 w-full md:w-auto md:max-w-md p-4 lg:p-6 overflow-y-auto pointer-events-auto flex flex-col justify-start">
+        <div className={`z-30 w-full md:w-auto ${role === 'ADMIN' ? 'md:max-w-lg lg:max-w-xl' : 'md:max-w-md'} p-4 lg:p-6 overflow-y-auto pointer-events-auto flex flex-col justify-start`}>
           {role === 'RIDER' && (
             <RiderView
               user={currentUser}
@@ -206,7 +217,21 @@ function RoleApp({ role }) {
 
           {role === 'ADMIN' && (
             <div className="w-full">
-              <AdminView drivers={drivers} />
+              <AdminView
+                drivers={drivers}
+                isConnected={isConnected}
+                onCenterMap={setMapCenter}
+                entityFilter={adminEntityFilter}
+                onFilterChange={setAdminEntityFilter}
+                activeLayers={adminLayers}
+                onLayerToggle={handleAdminLayerToggle}
+                selectedDriver={selectedDriver}
+                onSelectDriver={setSelectedDriver}
+                selectedRider={selectedRider}
+                onSelectRider={setSelectedRider}
+                riders={adminRiders}
+                setRiders={setAdminRiders}
+              />
             </div>
           )}
         </div>
@@ -222,6 +247,13 @@ function RoleApp({ role }) {
             routeCoordinates={mapRoute}
             driverRouteCoordinates={driverRoute}
             assignedDriverId={activeRide?.driverId}
+            entityFilter={role === 'ADMIN' ? adminEntityFilter : 'BOTH'}
+            activeLayers={role === 'ADMIN' ? adminLayers : undefined}
+            onDriverClick={role === 'ADMIN' ? setSelectedDriver : undefined}
+            onRiderClick={role === 'ADMIN' ? setSelectedRider : undefined}
+            selectedDriverId={role === 'ADMIN' ? selectedDriver?.id : undefined}
+            selectedRiderId={role === 'ADMIN' ? selectedRider?.id : undefined}
+            riders={role === 'ADMIN' ? adminRiders : []}
           />
         </div>
 
