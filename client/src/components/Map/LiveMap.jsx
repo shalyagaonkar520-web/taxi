@@ -1,14 +1,33 @@
 import React, { useEffect, useRef } from 'react';
 import L from 'leaflet';
 
-// Custom SVG Markers
-const createVehicleIcon = (category = 'UberX', heading = 0, isAssigned = false) => {
-  const iconColor = isAssigned ? '#06C167' : '#276EF1';
-  const size = isAssigned ? 42 : 36;
+// Custom SVG Vehicle Markers with Status Differentiation
+const createVehicleIcon = (
+  category = 'UberX',
+  heading = 0,
+  isAssigned = false,
+  status = 'ONLINE',
+  isSelected = false
+) => {
+  let iconColor = '#06C167'; // Default online available (emerald)
+  if (isAssigned) {
+    iconColor = '#276EF1'; // Assigned to trip (Uber blue)
+  } else if (status === 'BUSY') {
+    iconColor = '#F59E0B'; // Busy / on trip (amber)
+  } else if (status === 'OFFLINE') {
+    iconColor = '#64748B'; // Offline (slate gray)
+  }
+
+  const size = isSelected ? 44 : isAssigned ? 42 : 36;
+  const borderColor = isSelected ? '#FFFFFF' : iconColor;
+  const borderWidth = isSelected ? 3 : 2;
+  const glow = isSelected
+    ? 'box-shadow: 0 0 18px rgba(255,255,255,0.7), 0 4px 14px rgba(0,0,0,0.8);'
+    : 'box-shadow: 0 4px 14px rgba(0,0,0,0.6);';
 
   const svg = `
-    <div style="transform: rotate(${heading}deg); transition: transform 0.3s ease; width: ${size}px; height: ${size}px; display: flex; align-items: center; justify-content: center;">
-      <div style="background: #121216; border: 2px solid ${iconColor}; border-radius: 50%; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 14px rgba(0,0,0,0.6);">
+    <div style="transform: rotate(${heading}deg); transition: transform 0.3s ease; width: ${size}px; height: ${size}px; display: flex; align-items: center; justify-content: center; cursor: pointer;">
+      <div style="background: #121216; border: ${borderWidth}px solid ${borderColor}; border-radius: 50%; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; ${glow}">
         <svg xmlns="http://www.w3.org/2000/svg" width="${size - 14}" height="${size - 14}" viewBox="0 0 24 24" fill="none" stroke="${iconColor}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2"/>
           <circle cx="7" cy="17" r="2"/>
@@ -16,7 +35,7 @@ const createVehicleIcon = (category = 'UberX', heading = 0, isAssigned = false) 
           <circle cx="17" cy="17" r="2"/>
         </svg>
       </div>
-      <div style="position: absolute; top: -6px; width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 8px solid ${iconColor};"></div>
+      <div style="position: absolute; top: -6px; width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 8px solid ${borderColor};"></div>
     </div>
   `;
 
@@ -30,6 +49,56 @@ const createVehicleIcon = (category = 'UberX', heading = 0, isAssigned = false) 
 
 // Green = where you get in, red = where you get out. Same colours as the
 // dots in the rider sheet, so the map and the text always agree.
+// Custom SVG Rider Marker with Lifecycle Status Differentiation
+const createRiderIcon = (status = 'REQUESTED', isSelected = false) => {
+  let mainColor = '#A855F7'; // Purple default
+  let badgeColor = '#C084FC';
+  let pulseAnimation = '';
+
+  if (status === 'REQUESTED') {
+    mainColor = '#F59E0B'; // Amber - matching/requesting
+    badgeColor = '#FBBF24';
+    pulseAnimation = 'animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;';
+  } else if (status === 'ACCEPTED') {
+    mainColor = '#3B82F6'; // Blue - driver en route
+    badgeColor = '#60A5FA';
+    pulseAnimation = 'animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;';
+  } else if (status === 'ARRIVED') {
+    mainColor = '#10B981'; // Emerald - driver arrived at pickup
+    badgeColor = '#34D399';
+    pulseAnimation = 'animation: pulse 1s cubic-bezier(0.4, 0, 0.6, 1) infinite;';
+  } else if (status === 'IN_PROGRESS') {
+    mainColor = '#8B5CF6'; // Violet - in transit in vehicle
+    badgeColor = '#A78BFA';
+  }
+
+  const size = isSelected ? 44 : 38;
+  const borderColor = isSelected ? '#FFFFFF' : mainColor;
+  const borderWidth = isSelected ? 3 : 2;
+  const glow = isSelected
+    ? 'box-shadow: 0 0 20px rgba(255,255,255,0.85), 0 4px 14px rgba(0,0,0,0.8);'
+    : 'box-shadow: 0 4px 14px rgba(0,0,0,0.6);';
+
+  const svg = `
+    <div style="width: ${size}px; height: ${size}px; display: flex; align-items: center; justify-content: center; cursor: pointer; ${pulseAnimation}">
+      <div style="background: #111827; border: ${borderWidth}px solid ${borderColor}; border-radius: 50%; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; ${glow}">
+        <svg xmlns="http://www.w3.org/2000/svg" width="${size - 14}" height="${size - 14}" viewBox="0 0 24 24" fill="none" stroke="${badgeColor}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/>
+          <circle cx="12" cy="7" r="4"/>
+        </svg>
+      </div>
+      <div style="position: absolute; bottom: -3px; width: 8px; height: 8px; background: ${mainColor}; border: 1.5px solid #111827; border-radius: 50%;"></div>
+    </div>
+  `;
+
+  return L.divIcon({
+    html: svg,
+    className: 'rider-marker-icon',
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2]
+  });
+};
+
 const createPointIcon = (type = 'pickup') => {
   const isPickup = type === 'pickup';
   const color = isPickup ? '#06C167' : '#E11900';
@@ -66,14 +135,24 @@ export default function LiveMap({
   isPickerMode = false,
   pickerType = 'pickup',
   onPickerCenterChange = null
+  // Optional Live Operations features (with backward-compatible defaults)
+  entityFilter = 'BOTH', // 'CABS' | 'RIDERS' | 'BOTH'
+  onDriverClick = null,
+  onRiderClick = null,
+  selectedDriverId = null,
+  selectedRiderId = null,
+  riders = [],
+  activeLayers = { cabs: true, riders: true, trips: true, surge: false }
 }) {
   const mapRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const driverMarkersRef = useRef(new Map());
+  const riderMarkersRef = useRef(new Map());
   const pickupMarkerRef = useRef(null);
   const destinationMarkerRef = useRef(null);
   const routePolylineRef = useRef(null);
   const driverRoutePolylineRef = useRef(null);
+  const surgeCircleRef = useRef(null);
 
   // Initialize Map
   useEffect(() => {
@@ -84,7 +163,7 @@ export default function LiveMap({
       attributionControl: false
     }).setView(center, zoom);
 
-    // OpenStreetMap high-speed clean tile provider (No API key required)
+    // OpenStreetMap tile provider
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
       subdomains: ['a', 'b', 'c']
@@ -138,6 +217,7 @@ export default function LiveMap({
     if (isPickerMode) return;
     if (map && center && center.length === 2 && !routeCoordinates?.length) {
       map.flyTo(center, zoom || 15, { duration: 1.0 });
+      map.flyTo(center, zoom || 14, { duration: 1.2 });
     }
   }, [center, isPickerMode]);
 
@@ -145,6 +225,14 @@ export default function LiveMap({
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map || isPickerMode) return;
+
+    const shouldShowCabs = entityFilter !== 'RIDERS' && activeLayers?.cabs !== false;
+
+    if (!shouldShowCabs) {
+      driverMarkersRef.current.forEach((marker) => marker.remove());
+      driverMarkersRef.current.clear();
+      return;
+    }
 
     const currentDriverIds = new Set(drivers.map(d => d.id));
 
@@ -161,8 +249,15 @@ export default function LiveMap({
       if (!driver.location || !driver.location.lat) return;
 
       const isAssigned = driver.id === assignedDriverId;
+      const isSelected = driver.id === selectedDriverId;
       const heading = driver.location.heading || 0;
-      const icon = createVehicleIcon(driver.vehicle?.category, heading, isAssigned);
+      const icon = createVehicleIcon(
+        driver.vehicle?.category,
+        heading,
+        isAssigned,
+        driver.status,
+        isSelected
+      );
 
       if (driverMarkersRef.current.has(driver.id)) {
         const marker = driverMarkersRef.current.get(driver.id);
@@ -176,6 +271,14 @@ export default function LiveMap({
             <div style="padding: 2px 4px; font-size: 12px; line-height: 1.35;">
               <div style="font-weight: 700; color: #ffffff;">${driver.name || 'Driver'}</div>
               <div style="color: #d4d4d8;">${driver.vehicle?.make || ''} ${driver.vehicle?.model || ''}</div>
+            <div class="p-1 text-xs font-semibold">
+              <div class="flex items-center gap-1.5">
+                <span class="w-1.5 h-1.5 rounded-full ${
+                  driver.status === 'BUSY' ? 'bg-amber-400' : 'bg-emerald-400'
+                }"></span>
+                <span class="text-white">${driver.name}</span>
+              </div>
+              <div class="text-gray-300 font-normal mt-0.5">${driver.vehicle?.make || 'Vehicle'} ${driver.vehicle?.model || ''} • ${driver.status || 'ONLINE'}</div>
             </div>
           `, {
             className: 'nexride-map-tooltip',
@@ -183,10 +286,124 @@ export default function LiveMap({
             offset: [0, -18]
           });
 
+        if (onDriverClick) {
+          marker.on('click', () => {
+            onDriverClick(driver);
+          });
+        }
+
         driverMarkersRef.current.set(driver.id, marker);
       }
     });
   }, [drivers, assignedDriverId, isPickerMode]);
+  }, [drivers, assignedDriverId, entityFilter, activeLayers?.cabs, selectedDriverId, onDriverClick]);
+
+  // Update Riders on Map (if rider coordinates exist in state)
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    const shouldShowRiders = entityFilter !== 'CABS' && activeLayers?.riders !== false;
+
+    if (!shouldShowRiders || !riders || riders.length === 0) {
+      riderMarkersRef.current.forEach((marker) => marker.remove());
+      riderMarkersRef.current.clear();
+      return;
+    }
+
+    const currentRiderIds = new Set();
+
+    riders.forEach((rider) => {
+      let lat = rider.location?.lat || rider.lat;
+      let lng = rider.location?.lng || rider.lng;
+
+      // In transit: follow assigned driver's live GPS directly from latest drivers state
+      if (rider.rideStatus === 'IN_PROGRESS' && rider.driverId) {
+        const assigned = drivers.find((d) => d.id === rider.driverId);
+        if (assigned?.location?.lat && assigned?.location?.lng) {
+          lat = assigned.location.lat;
+          lng = assigned.location.lng;
+        }
+      }
+
+      if (!lat || !lng) return;
+
+      currentRiderIds.add(rider.id);
+      const isSelected = rider.id === selectedRiderId;
+      const icon = createRiderIcon(rider.rideStatus || 'REQUESTED', isSelected);
+
+      const statusBadge =
+        rider.rideStatus === 'REQUESTED'
+          ? '<span class="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-amber-500/20 text-amber-300">REQUESTING</span>'
+          : rider.rideStatus === 'ACCEPTED'
+          ? '<span class="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-blue-500/20 text-blue-300">DISPATCHED</span>'
+          : rider.rideStatus === 'ARRIVED'
+          ? '<span class="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-emerald-500/20 text-emerald-300">DRIVER ARRIVED</span>'
+          : rider.rideStatus === 'IN_PROGRESS'
+          ? '<span class="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-purple-500/20 text-purple-300 animate-pulse">ON TRIP</span>'
+          : '';
+
+      const tripSnippet = rider.destination?.address
+        ? `<div class="text-[10px] text-gray-300 truncate max-w-[180px] mt-0.5">To: ${rider.destination.address.split(',')[0]}</div>`
+        : '';
+
+      if (riderMarkersRef.current.has(rider.id)) {
+        const marker = riderMarkersRef.current.get(rider.id);
+        marker.setLatLng([lat, lng]);
+        marker.setIcon(icon);
+      } else {
+        const marker = L.marker([lat, lng], { icon })
+          .addTo(map)
+          .bindTooltip(`
+            <div class="p-1.5 text-xs font-semibold">
+              <div class="flex items-center gap-1.5">
+                <span class="text-white font-bold">${rider.name}</span>
+                ${statusBadge}
+              </div>
+              ${tripSnippet}
+              <div class="text-[9px] text-gray-400 mt-1">${rider.category || 'Ride'} • Tap for dispatch details</div>
+            </div>
+          `, { className: 'glass-dropdown rounded-lg shadow-xl' });
+
+        if (onRiderClick) {
+          marker.on('click', () => {
+            onRiderClick(rider);
+          });
+        }
+
+        riderMarkersRef.current.set(rider.id, marker);
+      }
+    });
+
+    riderMarkersRef.current.forEach((marker, id) => {
+      if (!currentRiderIds.has(id)) {
+        marker.remove();
+        riderMarkersRef.current.delete(id);
+      }
+    });
+  }, [riders, drivers, entityFilter, activeLayers?.riders, selectedRiderId, onRiderClick]);
+
+  // Optional Surge Heat Layer
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    if (activeLayers?.surge) {
+      if (!surgeCircleRef.current && center && center.length === 2) {
+        surgeCircleRef.current = L.circle(center, {
+          color: '#F59E0B',
+          fillColor: '#F59E0B',
+          fillOpacity: 0.15,
+          radius: 1600,
+          weight: 2,
+          dashArray: '6, 6'
+        }).addTo(map);
+      }
+    } else if (surgeCircleRef.current) {
+      surgeCircleRef.current.remove();
+      surgeCircleRef.current = null;
+    }
+  }, [activeLayers?.surge, center]);
 
   // Update Pickup & Destination Markers
   useEffect(() => {
@@ -227,7 +444,9 @@ export default function LiveMap({
     const map = mapInstanceRef.current;
     if (!map || isPickerMode) return;
 
-    if (routeCoordinates && routeCoordinates.length > 1) {
+    const showTrips = activeLayers?.trips !== false;
+
+    if (showTrips && routeCoordinates && routeCoordinates.length > 1) {
       if (routePolylineRef.current) {
         routePolylineRef.current.setLatLngs(routeCoordinates);
       } else {
@@ -240,7 +459,6 @@ export default function LiveMap({
         }).addTo(map);
       }
 
-      // Auto fit bounds
       try {
         const bounds = L.latLngBounds(routeCoordinates);
         map.fitBounds(bounds, { padding: [50, 50], maxZoom: 16 });
@@ -250,13 +468,16 @@ export default function LiveMap({
       routePolylineRef.current = null;
     }
   }, [routeCoordinates, isPickerMode]);
+  }, [routeCoordinates, activeLayers?.trips]);
 
   // Update Driver-to-Pickup Polyline
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map || isPickerMode) return;
 
-    if (driverRouteCoordinates && driverRouteCoordinates.length > 1) {
+    const showTrips = activeLayers?.trips !== false;
+
+    if (showTrips && driverRouteCoordinates && driverRouteCoordinates.length > 1) {
       if (driverRoutePolylineRef.current) {
         driverRoutePolylineRef.current.setLatLngs(driverRouteCoordinates);
       } else {
@@ -273,6 +494,7 @@ export default function LiveMap({
       driverRoutePolylineRef.current = null;
     }
   }, [driverRouteCoordinates, isPickerMode]);
+  }, [driverRouteCoordinates, activeLayers?.trips]);
 
   return (
     <div className="relative w-full h-full min-h-[350px]">
