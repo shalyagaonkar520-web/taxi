@@ -166,21 +166,23 @@ export default function DriverEarningsTab({
           {chartData.map((item, idx) => {
             const heightPercent = Math.min(Math.max((item.amount / maxAmount) * 100, 10), 100);
             return (
-              <div key={idx} className="flex-1 flex flex-col items-center gap-2 group relative">
+              <div key={idx} className="flex-1 h-full flex flex-col items-center justify-end gap-2 group relative">
                 {/* Tooltip */}
                 <span className="absolute -top-7 px-1.5 py-0.5 rounded bg-black/90 text-[10px] font-mono text-emerald-300 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-10">
                   ₹{item.amount}
                 </span>
                 
                 {/* Bar */}
-                <div 
-                  className="w-full rounded-xl bg-gradient-to-t from-blue-600/60 to-emerald-400 transition-all group-hover:brightness-125"
-                  style={{ height: `${heightPercent}%` }}
-                />
+                <div className="w-full flex-1 min-h-0 flex items-end">
+                  <div
+                    className="w-full rounded-xl bg-gradient-to-t from-blue-600/60 to-emerald-400 transition-all group-hover:brightness-125"
+                    style={{ height: `${heightPercent}%` }}
+                  />
+                </div>
                 
                 {/* Label */}
                 <span className="text-[10px] font-bold text-gray-400">
-                  {item.day}
+                  {item.day || item.time}
                 </span>
               </div>
             );

@@ -141,6 +141,15 @@ export default function DriverView({
       setIncomingRequest(null);
     };
 
+    const handleRideError = (err) => {
+      setIncomingRequest(null);
+      setErrorModalContent({
+        title: isKannada ? 'ಕ್ರಿಯೆ ಪೂರ್ಣಗೊಂಡಿಲ್ಲ' : 'Action not completed',
+        message: err?.message || 'Something went wrong. Please try again.'
+      });
+      setShowErrorModal(true);
+    };
+
     const handleRideCancelled = () => {
       onRideUpdate(null);
       setIncomingRequest(null);
@@ -162,6 +171,7 @@ export default function DriverView({
     socket.on('ride:request_cancelled', handleRequestClosed);
     socket.on('ride:cancelled_by_rider', handleCancelledByRider);
     socket.on('ride:cancelled', handleRideCancelled);
+    socket.on('ride:error', handleRideError);
 
     return () => {
       socket.off('ride:incoming_request', handleIncomingRequest);
@@ -173,6 +183,7 @@ export default function DriverView({
       socket.off('ride:request_cancelled', handleRequestClosed);
       socket.off('ride:cancelled_by_rider', handleCancelledByRider);
       socket.off('ride:cancelled', handleRideCancelled);
+      socket.off('ride:error', handleRideError);
     };
   }, [driverId, onRideUpdate, isKannada]);
 
@@ -193,18 +204,12 @@ export default function DriverView({
 
   // Ride Request Actions
   const handleAcceptRide = (req) => {
+    // The trip only starts once the server confirms (ride:accepted_confirmation); if the ride is
+    // gone the server answers with ride:error instead, so there is no optimistic local trip.
     socket.emit('ride:accept', {
       rideId: req.ride.id,
       driverId
     });
-    // Optimistic fallback for immediate UX feedback
-    if (!activeRide) {
-      onRideUpdate({
-        ...req.ride,
-        driverId,
-        status: 'ACCEPTED'
-      });
-    }
   };
 
   const handleDeclineRide = (req, reason = 'DRIVER_DECLINED') => {
@@ -506,7 +511,7 @@ export default function DriverView({
 
       {/* 7. DOCKED 5-TAB BOTTOM NAVIGATION BAR (Screenshots 2, 3, 6, 8, 10) */}
       <nav 
-        className="fixed bottom-0 left-0 right-0 z-40 bg-[#09090d]/95 backdrop-blur-xl border-t border-white/10 px-1 py-1 sm:py-2 shadow-2xl"
+        className="absolute bottom-0 left-0 right-0 z-40 bg-[#09090d]/95 backdrop-blur-xl border-t border-white/10 px-1 py-1 sm:py-2 shadow-2xl"
         style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
       >
         <div className="max-w-md mx-auto grid grid-cols-5 gap-0.5">

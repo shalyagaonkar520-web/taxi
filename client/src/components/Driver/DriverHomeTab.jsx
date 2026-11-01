@@ -60,102 +60,12 @@ export default function DriverHomeTab({
     acceptanceRate: driver?.acceptanceRate || 98
   };
 
-  // Mock Available Rides Feed matching Screenshot 5
-  const [availableRides, setAvailableRides] = useState([
-    {
-      id: 'ride-req-01',
-      vehicleType: 'Auto',
-      paymentMode: 'Cash',
-      fare: 65,
-      ratePerKm: 24,
-      pickupDistance: '1.6 km',
-      pickupDuration: '7 mins',
-      pickupAddress: 'MPN Altius, Subramanya Pura Road Padmanabhanagar Bengaluru Karnataka India',
-      dropDistance: '2.7 km',
-      dropDuration: '11 mins',
-      dropAddress: 'ಕನಕಪುರ ರೋಡ್ (Kanakapura Road)',
-      secondsRemaining: 15
-    },
-    {
-      id: 'ride-req-02',
-      vehicleType: 'Auto',
-      paymentMode: 'Cash',
-      fare: 78,
-      ratePerKm: 22,
-      pickupDistance: '1.6 km',
-      pickupDuration: '7 mins',
-      pickupAddress: 'JP Nagar 6th Phase Side, Jayaprakash Nagar Metro Station',
-      dropDistance: '3.5 km',
-      dropDuration: '15 mins',
-      dropAddress: 'ಬ್ರಿಗೇಡ್ ಗಾರ್ಡನಿಯಾ (Brigade Gardenia)',
-      secondsRemaining: 24
-    },
-    {
-      id: 'ride-req-03',
-      vehicleType: 'Auto',
-      paymentMode: 'Cash',
-      fare: 65,
-      ratePerKm: 24,
-      pickupDistance: '2.0 km',
-      pickupDuration: '8 mins',
-      pickupAddress: 'Banashankari 2nd Stage, BDA Complex',
-      dropDistance: '3.1 km',
-      dropDuration: '12 mins',
-      dropAddress: 'ಉತ್ತರಹಳ್ಳಿ ಮುಖ್ಯ ರಸ್ತೆ (Uttarahalli Main Rd)',
-      secondsRemaining: 30
-    }
-  ]);
+  // Open ride requests listed on the home tab. Real requests arrive through the incoming-request
+  // sheet (socket); there is no placeholder feed, so accepting here can never start a fake trip.
+  const [availableRides, setAvailableRides] = useState([]);
 
   const [sortOrder, setSortOrder] = useState('old_to_new'); // 'old_to_new' | 'fare_high'
   const [showPromoModal, setShowPromoModal] = useState(false);
-
-  // Active ride countdown timers
-  useEffect(() => {
-    if (!isOnline) return;
-    const interval = setInterval(() => {
-      setAvailableRides((prev) => {
-        const updated = prev
-          .map((r) => ({ ...r, secondsRemaining: r.secondsRemaining - 1 }))
-          .filter((r) => r.secondsRemaining > 0);
-        
-        // If empty, auto-replenish with fresh requests after 4s so driver always has rides to test
-        if (updated.length === 0) {
-          return [
-            {
-              id: `ride-req-${Date.now()}-1`,
-              vehicleType: 'Auto',
-              paymentMode: 'Cash',
-              fare: 65,
-              ratePerKm: 24,
-              pickupDistance: '1.6 km',
-              pickupDuration: '7 mins',
-              pickupAddress: 'MPN Altius, Subramanya Pura Road Padmanabhanagar Bengaluru Karnataka India',
-              dropDistance: '2.7 km',
-              dropDuration: '11 mins',
-              dropAddress: 'ಕನಕಪುರ ರೋಡ್ (Kanakapura Road)',
-              secondsRemaining: 25
-            },
-            {
-              id: `ride-req-${Date.now()}-2`,
-              vehicleType: 'Auto',
-              paymentMode: 'Cash',
-              fare: 78,
-              ratePerKm: 22,
-              pickupDistance: '1.6 km',
-              pickupDuration: '7 mins',
-              pickupAddress: 'JP Nagar 6th Phase Side, Jayaprakash Nagar Metro Station',
-              dropDistance: '3.5 km',
-              dropDuration: '15 mins',
-              dropAddress: 'ಬ್ರಿಗೇಡ್ ಗಾರ್ಡನಿಯಾ (Brigade Gardenia)',
-              secondsRemaining: 30
-            }
-          ];
-        }
-        return updated;
-      });
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [isOnline]);
 
   const handleDeclineSingleRide = (rideId) => {
     setAvailableRides(prev => prev.filter(r => r.id !== rideId));

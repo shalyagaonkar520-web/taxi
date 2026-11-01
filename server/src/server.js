@@ -142,7 +142,7 @@ app.get('/api/users/:id', (req, res) => {
 });
 
 app.patch('/api/users/:id', (req, res) => {
-  const { name, email, phone, avatar } = req.body || {};
+  const { name, email, phone, avatar, ivrEnabled } = req.body || {};
   if (typeof email === 'string' && email.trim() && db.isEmailTaken(email.trim(), req.params.id)) {
     return res.status(409).json({ error: 'That email is already in use' });
   }
@@ -150,7 +150,8 @@ app.patch('/api/users/:id', (req, res) => {
     ...(typeof name === 'string' && name.trim() ? { name: name.trim() } : {}),
     ...(typeof email === 'string' && email.trim() ? { email: email.trim().toLowerCase() } : {}),
     ...(typeof phone === 'string' ? { phone: phone.trim() } : {}),
-    ...(typeof avatar === 'string' ? { avatar: avatar.trim() } : {})
+    ...(typeof avatar === 'string' ? { avatar: avatar.trim() } : {}),
+    ...(typeof ivrEnabled === 'boolean' ? { ivrEnabled } : {})
   });
   if (!user) return res.status(404).json({ error: 'User not found' });
   res.json({ user: db.sanitizeUser(user) });

@@ -535,8 +535,8 @@ async function offerToNextDriver(io, rideId, rider) {
 
   await emitIncomingRequest(io.to(`user:${driver.id}`), ride, driver, riderUser);
 
-  // Keypad-phone drivers get an automated call for the same offer.
-  try {
+  // Drivers who opted in to keypad-phone dispatch get an automated call for the same offer.
+  if (driver.ivrEnabled) try {
     ivrService.initiateKeypadDispatch({
       driverPhone: driver.phone,
       driverId: driver.id,

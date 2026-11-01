@@ -155,7 +155,7 @@ export default function DriverKeypadCallSimulator({
   return (
     <>
       {/* FLOATING TEST SHORTCUT PILL */}
-      <div className="fixed top-16 right-3 z-40">
+      <div className="absolute bottom-20 right-3 z-40">
         <button
           onClick={handleSimulateCall}
           className="touch-target px-3 py-1.5 rounded-full bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-[10px] font-black tracking-wide shadow-lg flex items-center gap-1.5 transition-all active:scale-95"
