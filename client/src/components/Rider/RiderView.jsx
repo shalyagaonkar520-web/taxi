@@ -186,6 +186,7 @@ export default function RiderView({
   const [paymentMethod, setPaymentMethod] = useState('WALLET');
   const [promoCode, setPromoCode] = useState('');
   const [discountPercent, setDiscountPercent] = useState(0);
+  const [rideError, setRideError] = useState('');
 
   // Rating & Tip Modal
   const [rating, setRating] = useState(5);
@@ -250,6 +251,10 @@ export default function RiderView({
       setChatMessages((prev) => [...prev, msg]);
     });
 
+    socket.on('ride:error', (err) => {
+      setRideError(err?.message || 'Something went wrong. Please try again.');
+    });
+
     return () => {
       socket.off('ride:created');
       socket.off('ride:cancelled');
@@ -258,6 +263,7 @@ export default function RiderView({
       socket.off('ride:started');
       socket.off('ride:completed');
       socket.off('chat:message');
+      socket.off('ride:error');
     };
   }, []);
 
@@ -323,13 +329,16 @@ export default function RiderView({
   // Request Ride
   const handleRequestRide = () => {
     sound.playRideRequest();
+    setRideError('');
     socket.emit('ride:request', {
       riderId: user?.id || 'rider-01',
       pickup,
       destination,
       category: selectedTier,
-      paymentMethod
+      paymentMethod,
+      promoCode: discountPercent > 0 ? 'SAVE20' : undefined
     });
+    setDiscountPercent(0);
   };
 
   // Send in-trip chat message
@@ -652,6 +661,12 @@ export default function RiderView({
                   {discountPercent > 0 ? `🎉 ${discountPercent}% OFF` : '+ Promo Code'}
                 </button>
               </div>
+
+              {rideError && (
+                <div role="alert" className="text-xs font-semibold text-red-300 bg-red-500/10 border border-red-500/30 rounded-xl px-3 py-2">
+                  {rideError}
+                </div>
+              )}
 
               {/* Request Button */}
               <button

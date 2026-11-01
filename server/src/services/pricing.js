@@ -144,12 +144,15 @@ const BOOKING_FEE = 1.50;
  */
 function calculateFare({ category = 'UberX', distanceKm = 1, durationMin = 5, surgeMultiplier = 1.0, currencyInfo = getCurrencyForLocation() }) {
   const tier = VEHICLE_TIERS[category] || VEHICLE_TIERS.UberX;
+  distanceKm = Number.isFinite(Number(distanceKm)) ? Number(distanceKm) : 1;
+  durationMin = Number.isFinite(Number(durationMin)) ? Number(durationMin) : 5;
+  surgeMultiplier = Number(surgeMultiplier) > 0 ? Number(surgeMultiplier) : 1.0;
 
   const rawFare = tier.baseFare +
     (distanceKm * tier.perKmRate) +
     (durationMin * tier.perMinRate);
 
-  const subtotal = rawFare * (surgeMultiplier || 1.0);
+  const subtotal = rawFare * surgeMultiplier;
   const total = Math.max(tier.minFare, subtotal + BOOKING_FEE);
 
   return {

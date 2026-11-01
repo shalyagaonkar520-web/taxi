@@ -137,11 +137,14 @@ app.get('/api/users', (req, res) => {
 app.get('/api/users/:id', (req, res) => {
   const user = db.getUserById(req.params.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
-  res.json(user);
+  res.json(db.sanitizeUser(user));
 });
 
 app.patch('/api/users/:id', (req, res) => {
   const { name, email, phone, avatar } = req.body || {};
+  if (typeof email === 'string' && email.trim() && db.isEmailTaken(email.trim(), req.params.id)) {
+    return res.status(409).json({ error: 'That email is already in use' });
+  }
   const user = db.updateUser(req.params.id, {
     ...(typeof name === 'string' && name.trim() ? { name: name.trim() } : {}),
     ...(typeof email === 'string' && email.trim() ? { email: email.trim().toLowerCase() } : {}),
@@ -169,8 +172,11 @@ app.get('/api/drivers', (req, res) => {
 
 // Relocate drivers around user location
 app.post('/api/drivers/relocate', (req, res) => {
-  const { lat, lng } = req.body;
-  if (!lat || !lng) return res.status(400).json({ error: 'lat and lng are required' });
+  const lat = Number(req.body?.lat);
+  const lng = Number(req.body?.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+    return res.status(400).json({ error: 'Valid lat and lng are required' });
+  }
 
   const drivers = db.getDrivers();
   const offsets = [
@@ -184,11 +190,11 @@ app.post('/api/drivers/relocate', (req, res) => {
     const off = offsets[idx % offsets.length];
     db.updateDriver(driver.id, {
       location: {
-        lat: parseFloat(lat) + off.dLat,
-        lng: parseFloat(lng) + off.dLng,
+        lat: lat + off.dLat,
+        lng: lng + off.dLng,
         heading: off.heading
       },
-      status: 'ONLINE'
+      ...(driver.status === 'BUSY' ? {} : { status: 'ONLINE' })
     });
   });
 
@@ -201,6 +207,7 @@ app.post('/api/drivers/relocate', (req, res) => {
 app.get('/api/places/search', async (req, res) => {
   try {
     const { q, lat, lng } = req.query;
+    if (!q || !String(q).trim()) return res.json([]);
     const places = await searchPlaces(q, parseFloat(lat), parseFloat(lng));
     res.json(places);
   } catch (err) {
@@ -251,9 +258,12 @@ app.get('/api/places/reverse', async (req, res) => {
 // Calculate Route & Fare Quotes
 app.post('/api/rides/quotes', async (req, res) => {
   try {
-    const { pickup, destination } = req.body;
+    const { pickup, destination } = req.body || {};
     if (!pickup || !destination) {
       return res.status(400).json({ error: 'Pickup and destination are required' });
+    }
+    if (![pickup.lat, pickup.lng, destination.lat, destination.lng].every((n) => Number.isFinite(Number(n)))) {
+      return res.status(400).json({ error: 'Pickup and destination need valid coordinates' });
     }
 
     const settings = db.getSettings();
@@ -307,20 +317,23 @@ app.get('/api/wallet/:userId', (req, res) => {
 
 // Top-up wallet
 app.post('/api/wallet/topup', (req, res) => {
-  const { userId, amount, paymentMethod = 'Card' } = req.body;
-  if (!amount || amount <= 0) return res.status(400).json({ error: 'Invalid amount' });
+  const { userId, paymentMethod = 'Card' } = req.body || {};
+  const amount = Number(req.body?.amount);
+  if (!Number.isFinite(amount) || amount <= 0 || amount > 10000) {
+    return res.status(400).json({ error: 'Amount must be between 0.01 and 10000' });
+  }
 
   const user = db.getUserById(userId);
   if (!user) return res.status(404).json({ error: 'User not found' });
 
-  const newBalance = Number(((user.walletBalance || 0) + parseFloat(amount)).toFixed(2));
+  const newBalance = Number(((user.walletBalance || 0) + amount).toFixed(2));
   db.updateUser(userId, { walletBalance: newBalance });
 
   const tx = db.addTransaction({
     userId,
-    amount: parseFloat(amount),
+    amount: Number(amount.toFixed(2)),
     type: 'WALLET_TOPUP',
-    description: `Wallet Top-Up via ${paymentMethod}`
+    description: `Wallet Top-Up via ${String(paymentMethod).slice(0, 40)}`
   });
 
   res.json({
@@ -336,7 +349,7 @@ app.get('/api/admin/metrics', (req, res) => {
   const completed = rides.filter(r => r.status === 'COMPLETED');
   
   const totalRevenue = completed.reduce((sum, r) => sum + (r.fare || 0), 0);
-  const platformRevenue = completed.reduce((sum, r) => sum + (r.platformFee || (r.fare * 0.2)), 0);
+  const platformRevenue = completed.reduce((sum, r) => sum + (r.platformFee ?? ((r.fare || 0) * 0.2)), 0);
 
   res.json({
     totalRides: rides.length,
@@ -354,9 +367,25 @@ app.get('/api/admin/metrics', (req, res) => {
 
 // Update Admin Settings (Surge, Commission)
 app.post('/api/admin/settings', (req, res) => {
-  const updated = db.updateSettings(req.body);
+  let updated;
+  try {
+    updated = db.updateSettings(req.body || {});
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
   io.emit('settings:updated', updated);
   res.json(updated);
+});
+
+// Malformed JSON bodies and other middleware errors should be 4xx JSON, not HTML stack traces.
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  const status = err.status || err.statusCode || 500;
+  res.status(status).json({ error: status === 500 ? 'Internal server error' : err.message });
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason);
 });
 
 async function startServer() {

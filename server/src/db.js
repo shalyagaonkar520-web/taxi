@@ -203,10 +203,23 @@ const INITIAL_DATA = {
   }
 };
 
+const SUPPORTED_CURRENCIES = {
+  USD: { code: 'USD', symbol: '$', locale: 'en-US' },
+  INR: { code: 'INR', symbol: '₹', locale: 'en-IN' },
+  GBP: { code: 'GBP', symbol: '£', locale: 'en-GB' },
+  EUR: { code: 'EUR', symbol: '€', locale: 'fr-FR' },
+  CAD: { code: 'CAD', symbol: 'C$', locale: 'en-CA' },
+  AUD: { code: 'AUD', symbol: 'A$', locale: 'en-AU' }
+};
+
 class Database {
   constructor() {
     this.data = this.loadData();
     this.pool = DATABASE_URL ? new Pool({ connectionString: DATABASE_URL }) : null;
+    if (this.pool) {
+      // Idle client errors would otherwise be an unhandled 'error' event and crash the process.
+      this.pool.on('error', (err) => console.error('PostgreSQL pool error:', err.message));
+    }
     this.pendingWrite = Promise.resolve();
     this.ensureUserCredentials();
   }
@@ -245,7 +258,7 @@ class Database {
   }
 
   verifyPassword(password, storedHash) {
-    if (!storedHash || !storedHash.includes(':')) return false;
+    if (typeof password !== 'string' || !storedHash || !storedHash.includes(':')) return false;
     const [salt, key] = storedHash.split(':');
     const derivedKey = crypto.scryptSync(password, salt, 64);
     const storedKey = Buffer.from(key, 'hex');
@@ -297,7 +310,7 @@ class Database {
 
   authenticateUser(email, password, role) {
     const user = this.data.users.find((candidate) =>
-      candidate.email.toLowerCase() === String(email).toLowerCase() &&
+      String(candidate.email || '').toLowerCase() === String(email).toLowerCase() &&
       candidate.role === role &&
       this.verifyPassword(password, candidate.passwordHash)
     );
@@ -316,7 +329,7 @@ class Database {
   upsertFirebaseUser(firebaseUser, role) {
     let user = this.data.users.find(candidate =>
       candidate.firebaseUid === firebaseUser.uid ||
-      candidate.email.toLowerCase() === firebaseUser.email.toLowerCase()
+      String(candidate.email || '').toLowerCase() === firebaseUser.email.toLowerCase()
     );
 
     if (user && user.role !== role) return null;
@@ -440,12 +453,20 @@ class Database {
     return this.data.users.find(u => u.id === id && u.role === 'DRIVER');
   }
 
-  updateDriver(id, updates) {
+  // Pass { persist: false } for high-frequency updates (GPS ticks) that should not hit storage every time.
+  updateDriver(id, updates, { persist = true } = {}) {
     const driver = this.getDriverById(id);
     if (!driver) return null;
     Object.assign(driver, updates);
-    this.saveData();
+    if (persist) this.saveData();
     return driver;
+  }
+
+  isEmailTaken(email, exceptUserId) {
+    const normalized = String(email || '').toLowerCase();
+    return this.data.users.some((user) =>
+      user.id !== exceptUserId && String(user.email || '').toLowerCase() === normalized
+    );
   }
 
   updateUser(id, updates) {
@@ -514,10 +535,47 @@ class Database {
     return this.data.settings;
   }
 
-  updateSettings(updates) {
-    Object.assign(this.data.settings, updates);
+  updateSettings(updates = {}) {
+    const settings = this.data.settings;
+    const next = {};
+
+    if (updates.surgeMultiplier !== undefined) {
+      const surge = Number(updates.surgeMultiplier);
+      if (!Number.isFinite(surge) || surge < 1 || surge > 10) {
+        throw new Error('surgeMultiplier must be a number between 1 and 10');
+      }
+      next.surgeMultiplier = Number(surge.toFixed(2));
+    }
+
+    if (updates.platformCommissionPercent !== undefined) {
+      const commission = Number(updates.platformCommissionPercent);
+      if (!Number.isFinite(commission) || commission < 0 || commission > 100) {
+        throw new Error('platformCommissionPercent must be a number between 0 and 100');
+      }
+      next.platformCommissionPercent = commission;
+    }
+
+    if (updates.autoDispatchEnabled !== undefined) {
+      next.autoDispatchEnabled = Boolean(updates.autoDispatchEnabled);
+    }
+
+    if (updates.city !== undefined) {
+      const city = String(updates.city).trim().slice(0, 120);
+      if (city) next.city = city;
+    }
+
+    if (updates.currencyCode !== undefined) {
+      const code = String(updates.currencyCode).toUpperCase();
+      const currency = SUPPORTED_CURRENCIES[code];
+      if (!currency) throw new Error('Unsupported currencyCode');
+      next.currencyCode = currency.code;
+      next.currencySymbol = currency.symbol;
+      next.currencyLocale = currency.locale;
+    }
+
+    Object.assign(settings, next);
     this.saveData();
-    return this.data.settings;
+    return settings;
   }
 }
 
