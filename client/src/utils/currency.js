@@ -7,7 +7,11 @@ const CURRENCY_BY_LOCATION = {
   australia: { code: 'AUD', symbol: 'A$', locale: 'en-AU' }
 };
 
-export function getCurrencyForLocation(location = '') {
+export function getCurrencyForLocation(location = '', currencyCodeOverride = null) {
+  if (currencyCodeOverride) {
+    const byCode = Object.values(CURRENCY_BY_LOCATION).find((c) => c.code === currencyCodeOverride);
+    if (byCode) return byCode;
+  }
   const normalized = String(location || '').toLowerCase();
 
   if (/(india|bengaluru|bangalore|mumbai|delhi|hyderabad|chennai|kolkata|pune)/.test(normalized)) {
