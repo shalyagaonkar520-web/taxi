@@ -1,6 +1,7 @@
 const db = require('./db');
 const { calculateHaversineDistance, calculateHeading, getDrivingRoute } = require('./services/routing');
 const { calculateFare, getCurrencyForLocation } = require('./services/pricing');
+const { sendRideAcceptedNotification } = require('./services/telegram');
 
 const OPEN_RIDE_STATUSES = ['REQUESTED', 'MATCHING', 'ACCEPTED', 'ARRIVED', 'IN_PROGRESS'];
 const REQUEST_EXPIRY_MS = 45000;
@@ -194,16 +195,25 @@ function setupSocketIO(io) {
       }
     }));
 
-    // Rider cancels a request before a driver accepts it.
+    // Rider cancels, either while still waiting or after a driver accepted
+    // but before the trip has started.
     socket.on('ride:cancel', ({ rideId, riderId } = {}) => {
       const ride = db.getRideById(rideId);
-      if (!ride || ride.riderId !== riderId || !['REQUESTED', 'MATCHING'].includes(ride.status)) return;
+      const cancellable = ['REQUESTED', 'MATCHING', 'ACCEPTED', 'ARRIVED'];
+      if (!ride || ride.riderId !== riderId || !cancellable.includes(ride.status)) return;
 
       const updatedRide = db.updateRide(rideId, {
         status: 'CANCELLED',
         cancelledAt: new Date().toISOString(),
         cancellationReason: 'Cancelled by rider'
       });
+
+      // A driver was already on the way - release them back to the road.
+      if (ride.driverId) {
+        db.updateDriver(ride.driverId, { status: 'ONLINE' });
+        io.to(`user:${ride.driverId}`).emit('ride:cancelled', { ride: updatedRide });
+        io.emit('driver:status_changed', { driverId: ride.driverId, status: 'ONLINE' });
+      }
 
       io.to(`user:${ride.riderId}`).emit('ride:cancelled', { ride: updatedRide });
       io.to('role:admin').emit('admin:ride_event', { type: 'RIDE_CANCELLED', ride: updatedRide });
@@ -249,6 +259,8 @@ function setupSocketIO(io) {
       });
 
       const rider = db.getUserById(ride.riderId);
+
+      sendRideAcceptedNotification(updatedRide, driver, rider);
 
       // Broadcast to Rider & Driver & Admin
       io.to(`user:${ride.riderId}`).emit('ride:accepted', {
@@ -600,6 +612,10 @@ async function simulateAutoDriverAcceptance(io, rideId) {
     etaToPickupMin: toPickupRoute.durationMin
   });
 
+  const rider = db.getUserById(ride.riderId);
+
+  sendRideAcceptedNotification(updatedRide, availableDriver, rider);
+
   io.to(`user:${ride.riderId}`).emit('ride:accepted', {
     ride: updatedRide,
     driver: availableDriver,
@@ -608,7 +624,7 @@ async function simulateAutoDriverAcceptance(io, rideId) {
 
   io.to(`user:${availableDriver.id}`).emit('ride:accepted_confirmation', {
     ride: updatedRide,
-    rider: db.sanitizeUser(db.getUserById(ride.riderId)),
+    rider: db.sanitizeUser(rider),
     routeToPickup: toPickupRoute
   });
 

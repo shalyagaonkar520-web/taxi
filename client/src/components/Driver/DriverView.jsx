@@ -64,6 +64,14 @@ export default function DriverView({
       sound.playTripCompleted();
     });
 
+    // The rider called it off - clear the trip so the driver is free again.
+    socket.on('ride:cancelled', () => {
+      onRideUpdate(null);
+      setIncomingRequest(null);
+      setEnteredOtp('');
+      setOtpError('');
+    });
+
     socket.on('ride:error', (err) => {
       setOtpError(err.message || 'Invalid PIN');
     });
@@ -74,6 +82,7 @@ export default function DriverView({
       socket.off('ride:arrival_confirmed');
       socket.off('ride:started_confirmation');
       socket.off('ride:completed_confirmation');
+      socket.off('ride:cancelled');
       socket.off('ride:error');
     };
   }, []);

@@ -19,6 +19,8 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/nexride_dev
       ADMIN_EMAIL: admin@nexride.com
       ADMIN_PASSWORD: ci-admin-password
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || 'ci-test-token' }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID || '-1000000000000' }}
 
     services:
       postgres:

@@ -99,7 +99,7 @@ const createRiderIcon = (status = 'REQUESTED', isSelected = false) => {
 
 const createPointIcon = (type = 'pickup') => {
   const isPickup = type === 'pickup';
-  const color = isPickup ? '#276EF1' : '#E11900';
+  const color = isPickup ? '#06C167' : '#E11900';
   const label = isPickup ? 'A' : 'B';
 
   const svg = `
@@ -175,7 +175,11 @@ export default function LiveMap({
 
     mapInstanceRef.current = map;
 
+    // Recalculate size after first render so tiles fill the container
+    const sizeTimer = setTimeout(() => map.invalidateSize(), 250);
+
     return () => {
+      clearTimeout(sizeTimer);
       map.remove();
       mapInstanceRef.current = null;
     };
