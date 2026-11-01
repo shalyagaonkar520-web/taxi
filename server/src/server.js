@@ -3,13 +3,14 @@ const http = require('http');
 const cors = require('cors');
 const { Server } = require('socket.io');
 const dotenv = require('dotenv');
-const jwt = require('jsonwebtoken');
+const { initializeApp, cert } = require('firebase-admin/app');
+const { getAuth } = require('firebase-admin/auth');
 
 dotenv.config();
 
 const db = require('./db');
 const { getFareQuotes, calculateFare, VEHICLE_TIERS } = require('./services/pricing');
-const { getDrivingRoute, searchPlaces, reverseGeocode } = require('./services/routing');
+const { getDrivingRoute, searchPlaces, reverseGeocode, calculateHaversineDistance } = require('./services/routing');
 const { setupSocketIO } = require('./socket');
 const ivrService = require('./services/ivrService');
 
@@ -17,107 +18,47 @@ const app = express();
 const server = http.createServer(app);
 
 const PORT = process.env.PORT || 5000;
-const JWT_SECRET = process.env.JWT_SECRET || 'nexride-secure-production-jwt-token-key-2026';
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@nexride.com';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+let firebaseAuth = null;
 
-// Enable CORS for frontend Vite client
+if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+  try {
+    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+    initializeApp({ credential: cert(serviceAccount) });
+    firebaseAuth = getAuth();
+  } catch (err) {
+    console.error('Firebase Admin configuration is invalid:', err.message);
+  }
+} else if (process.env.FIREBASE_PROJECT_ID) {
+  try {
+    // ID-token verification uses Firebase's public signing keys; no private service account is needed.
+    initializeApp({ projectId: process.env.FIREBASE_PROJECT_ID });
+    firebaseAuth = getAuth();
+  } catch (err) {
+    console.error('Firebase project configuration is invalid:', err.message);
+  }
+}
+
+const allowedOrigins = (process.env.CORS_ORIGIN || '*')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+// Enable CORS for the configured frontend origins.
 app.use(cors({
-  origin: '*',
+  origin: allowedOrigins.includes('*') ? '*' : allowedOrigins,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH']
 }));
 
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 
 // Initialize Socket.IO
 const io = new Server(server, {
   cors: {
-    origin: '*',
+    origin: allowedOrigins.includes('*') ? '*' : allowedOrigins,
     methods: ['GET', 'POST']
   }
-});
-
-setupSocketIO(io);
-ivrService.setSocketIO(io);
-
-// ---------------- AUTHENTICATION & ROLE GUARDS ----------------
-
-function generateToken(user) {
-  return jwt.sign(
-    {
-      id: user.id,
-      email: user.email,
-      role: user.role,
-      name: user.name
-    },
-    JWT_SECRET,
-    { expiresIn: '7d' }
-  );
-}
-
-function verifyTokenMiddleware(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Unauthorized: Missing bearer token' });
-  }
-  const token = authHeader.split(' ')[1];
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = decoded;
-    next();
-  } catch (err) {
-    return res.status(401).json({ error: 'Unauthorized: Invalid or expired token' });
-  }
-}
-
-// Login endpoint: supports email+password or fast demo role login ({ role: 'RIDER' | 'DRIVER' | 'ADMIN' })
-app.post('/api/auth/login', (req, res) => {
-  const { email, password, role } = req.body;
-
-  let user = null;
-  if (role) {
-    const users = db.getUsers();
-    user = users.find(u => u.role.toUpperCase() === role.toUpperCase());
-    if (!user) {
-      // Driver might be in driver table
-      const drivers = db.getDrivers();
-      user = drivers.find(d => d.role.toUpperCase() === role.toUpperCase());
-    }
-  } else if (email) {
-    user = db.getUserByEmail(email);
-    if (!user) {
-      const driver = db.getDrivers().find(d => d.email.toLowerCase() === email.toLowerCase());
-      if (driver) {
-        user = {
-          id: driver.id,
-          name: driver.name,
-          email: driver.email,
-          role: 'DRIVER',
-          phone: driver.phone,
-          rating: driver.rating,
-          walletBalance: driver.walletBalance,
-          avatar: driver.avatar
-        };
-      }
-    }
-  }
-
-  if (!user) {
-    return res.status(404).json({ error: 'User account not found' });
-  }
-
-  const safeUser = db.getUserById(user.id) || user;
-  const token = generateToken(safeUser);
-
-  res.json({
-    token,
-    user: safeUser
-  });
-});
-
-// Current user profile
-app.get('/api/auth/me', verifyTokenMiddleware, (req, res) => {
-  const user = db.getUserById(req.user.id);
-  if (!user) return res.status(404).json({ error: 'User not found' });
-  res.json(user);
 });
 
 // ---------------- REST API ROUTES ----------------
@@ -132,6 +73,63 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Login for one role at a time. Admin credentials are environment-only.
+app.post('/api/auth/login', (req, res) => {
+  const { email, password, role } = req.body || {};
+  const normalizedRole = String(role || '').toUpperCase();
+
+  if (!email || !password || !['RIDER', 'DRIVER', 'ADMIN'].includes(normalizedRole)) {
+    return res.status(400).json({ error: 'Email, password, and role are required' });
+  }
+
+  let user = null;
+  if (normalizedRole === 'ADMIN') {
+    if (ADMIN_PASSWORD && email.toLowerCase() === ADMIN_EMAIL.toLowerCase() && password === ADMIN_PASSWORD) {
+      user = db.sanitizeUser(db.getUserById('admin-01'));
+    }
+  } else {
+    user = db.authenticateUser(email, password, normalizedRole);
+  }
+
+  if (!user) return res.status(401).json({ error: 'Invalid credentials for this workspace' });
+  res.json({ user: { ...user, role: normalizedRole } });
+});
+
+app.post('/api/auth/firebase', async (req, res) => {
+  if (!firebaseAuth) return res.status(503).json({ error: 'Firebase authentication is not configured on the server' });
+
+  const { idToken, role, profile } = req.body || {};
+  const normalizedRole = String(role || '').toUpperCase();
+  if (!idToken || !['RIDER', 'DRIVER', 'ADMIN'].includes(normalizedRole)) {
+    return res.status(400).json({ error: 'A Firebase token and valid role are required' });
+  }
+
+  try {
+    const decoded = await firebaseAuth.verifyIdToken(idToken);
+    const email = String(decoded.email || '').toLowerCase();
+    if (!email || decoded.email_verified === false) {
+      return res.status(401).json({ error: 'A verified Firebase account is required' });
+    }
+    if (normalizedRole === 'ADMIN' && email !== ADMIN_EMAIL.toLowerCase()) {
+      return res.status(403).json({ error: 'This account is not the NexRide admin account' });
+    }
+
+    const user = normalizedRole === 'ADMIN'
+      ? db.sanitizeUser(db.getUserById('admin-01'))
+      : db.upsertFirebaseUser({
+          uid: decoded.uid,
+          email,
+          name: profile?.name || decoded.name,
+          picture: profile?.picture || decoded.picture
+        }, normalizedRole);
+
+    if (!user) return res.status(403).json({ error: 'This account is assigned to another workspace' });
+    res.json({ user: { ...user, role: normalizedRole } });
+  } catch (err) {
+    res.status(401).json({ error: 'Invalid or expired Firebase token' });
+  }
+});
+
 // Users & Demo accounts
 app.get('/api/users', (req, res) => {
   res.json(db.getUsers());
@@ -140,7 +138,32 @@ app.get('/api/users', (req, res) => {
 app.get('/api/users/:id', (req, res) => {
   const user = db.getUserById(req.params.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
-  res.json(user);
+  res.json(db.sanitizeUser(user));
+});
+
+app.patch('/api/users/:id', (req, res) => {
+  const { name, email, phone, avatar } = req.body || {};
+  if (typeof email === 'string' && email.trim() && db.isEmailTaken(email.trim(), req.params.id)) {
+    return res.status(409).json({ error: 'That email is already in use' });
+  }
+  const user = db.updateUser(req.params.id, {
+    ...(typeof name === 'string' && name.trim() ? { name: name.trim() } : {}),
+    ...(typeof email === 'string' && email.trim() ? { email: email.trim().toLowerCase() } : {}),
+    ...(typeof phone === 'string' ? { phone: phone.trim() } : {}),
+    ...(typeof avatar === 'string' ? { avatar: avatar.trim() } : {})
+  });
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  res.json({ user: db.sanitizeUser(user) });
+});
+
+app.post('/api/users/:id/password', (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  if (!currentPassword || !newPassword || newPassword.length < 8) {
+    return res.status(400).json({ error: 'Current password and a new password of at least 8 characters are required' });
+  }
+  const user = db.changePassword(req.params.id, currentPassword, newPassword);
+  if (!user) return res.status(401).json({ error: 'Current password is incorrect or this account uses Firebase' });
+  res.json({ user });
 });
 
 // Drivers list
@@ -150,8 +173,11 @@ app.get('/api/drivers', (req, res) => {
 
 // Relocate drivers around user location
 app.post('/api/drivers/relocate', (req, res) => {
-  const { lat, lng } = req.body;
-  if (!lat || !lng) return res.status(400).json({ error: 'lat and lng are required' });
+  const lat = Number(req.body?.lat);
+  const lng = Number(req.body?.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+    return res.status(400).json({ error: 'Valid lat and lng are required' });
+  }
 
   const drivers = db.getDrivers();
   const offsets = [
@@ -165,11 +191,11 @@ app.post('/api/drivers/relocate', (req, res) => {
     const off = offsets[idx % offsets.length];
     db.updateDriver(driver.id, {
       location: {
-        lat: parseFloat(lat) + off.dLat,
-        lng: parseFloat(lng) + off.dLng,
+        lat: lat + off.dLat,
+        lng: lng + off.dLng,
         heading: off.heading
       },
-      status: 'ONLINE'
+      ...(driver.status === 'BUSY' ? {} : { status: 'ONLINE' })
     });
   });
 
@@ -178,146 +204,43 @@ app.post('/api/drivers/relocate', (req, res) => {
   res.json(updatedDrivers);
 });
 
-// ---------------- DRIVER EXTENSION REST API ----------------
-
-// Driver Summary
-app.get('/api/driver/:id/summary', (req, res) => {
-  try {
-    const summary = db.getDriverSummary(req.params.id);
-    if (!summary) return res.status(404).json({ error: 'Driver summary not found' });
-    res.json(summary);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Driver Earnings & Breakdown
-app.get('/api/driver/:id/earnings', (req, res) => {
-  try {
-    const range = req.query.range === 'day' ? 'day' : 'week';
-    const earnings = db.getDriverEarnings(req.params.id, range);
-    res.json(earnings);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Instant Cash Out
-app.post('/api/driver/:id/cashout', (req, res) => {
-  try {
-    const { amount, method } = req.body;
-    const result = db.recordCashout(req.params.id, amount, method);
-    res.json(result);
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-
-// Demand Surge Heatmap
-app.get('/api/driver/heatmap', (req, res) => {
-  try {
-    const heatmap = db.getDriverHeatmap();
-    res.json(heatmap);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Driver Quests & Incentives
-app.get('/api/driver/:id/quests', (req, res) => {
-  try {
-    const quests = db.getDriverQuests(req.params.id);
-    res.json(quests);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/driver/:id/quests', (req, res) => {
-  try {
-    const { questId } = req.body;
-    const result = db.claimQuest(req.params.id, questId);
-    res.json(result);
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-
-// Driver KYC
-app.get('/api/driver/:id/kyc', (req, res) => {
-  try {
-    const kyc = db.getDriverKyc(req.params.id);
-    res.json(kyc);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/driver/:id/kyc', (req, res) => {
-  try {
-    const { docType, data } = req.body;
-    const updated = db.updateDriverKyc(req.params.id, docType, data || {});
-    res.json(updated);
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-
-// Driver Destination Mode
-app.get('/api/driver/:id/destination', (req, res) => {
-  try {
-    const dest = db.getDriverDestination(req.params.id);
-    res.json(dest);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/driver/:id/destination', (req, res) => {
-  try {
-    const { enabled, destination } = req.body;
-    const result = db.setDriverDestination(req.params.id, { enabled, destination });
-    res.json(result);
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-
-// --- Local Mock IVR Dispatcher Endpoints for Keypad Feature Phones ---
-const { initiateKeypadDispatch, handleKeypadInput, getActiveCalls } = require('./services/ivrService');
-
-app.post('/api/ivr/dispatch', (req, res) => {
-  try {
-    const { driverPhone, driverId, ride } = req.body;
-    const callData = initiateKeypadDispatch({ driverPhone, driverId, ride });
-    res.json({ success: true, call: callData });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/ivr/keypad', (req, res) => {
-  try {
-    const { callId, digit, driverId } = req.body;
-    const result = handleKeypadInput({ callId, digit, driverId });
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/ivr/calls', (req, res) => {
-  res.json({ calls: getActiveCalls() });
-});
-
 // Places Autocomplete / Geocoding
 app.get('/api/places/search', async (req, res) => {
   try {
     const { q, lat, lng } = req.query;
+    if (!q || !String(q).trim()) return res.json([]);
     const places = await searchPlaces(q, parseFloat(lat), parseFloat(lng));
     res.json(places);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/places/nearby', async (req, res) => {
+  const lat = parseFloat(req.query.lat);
+  const lng = parseFloat(req.query.lng);
+  const category = String(req.query.category || 'tourism');
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return res.status(400).json({ error: 'Valid lat and lng are required' });
+  }
+  try {
+    const queries = category === 'food'
+      ? ['restaurant', 'cafe', 'food court']
+      : ['park', 'museum', 'mall', 'airport', 'train station', 'tourist attraction'];
+    const results = (await Promise.all(queries.map(query => searchPlaces(query, lat, lng))))
+      .flat()
+      .filter(place => Number.isFinite(place.lat) && Number.isFinite(place.lng))
+      .map(place => ({
+        ...place,
+        distanceKm: Number(calculateHaversineDistance(lat, lng, place.lat, place.lng).toFixed(1))
+      }))
+      .filter(place => place.distanceKm <= 50)
+      .filter((place, index, places) => places.findIndex(other => other.name === place.name) === index)
+      .sort((a, b) => a.distanceKm - b.distanceKm)
+      .slice(0, 12);
+    res.json(results);
+  } catch (err) {
+    res.status(502).json({ error: 'Nearby places are temporarily unavailable' });
   }
 });
 
@@ -333,27 +256,36 @@ app.get('/api/places/reverse', async (req, res) => {
   }
 });
 
-// Calculate Route & Fare Quotes across all 7 vehicle tiers
+// Calculate Route & Fare Quotes
 app.post('/api/rides/quotes', async (req, res) => {
   try {
-    const { pickup, destination } = req.body;
+    const { pickup, destination } = req.body || {};
     if (!pickup || !destination) {
       return res.status(400).json({ error: 'Pickup and destination are required' });
+    }
+    if (![pickup.lat, pickup.lng, destination.lat, destination.lng].every((n) => Number.isFinite(Number(n)))) {
+      return res.status(400).json({ error: 'Pickup and destination need valid coordinates' });
     }
 
     const settings = db.getSettings();
     const route = await getDrivingRoute(pickup, destination);
+    const location = settings.city || pickup?.address || destination?.address || '';
     const quotes = getFareQuotes({
       distanceKm: route.distanceKm,
       durationMin: route.durationMin,
-      surgeMultiplier: settings.surgeMultiplier
+      surgeMultiplier: settings.surgeMultiplier,
+      location,
+      currencyCode: settings.currencyCode || null
     });
 
     res.json({
       route,
       quotes,
       surgeMultiplier: settings.surgeMultiplier,
-      city: settings.city
+      city: settings.city,
+      currency: quotes[0]?.currency || settings.currencySymbol || '$',
+      currencyCode: quotes[0]?.currencyCode || settings.currencyCode || 'USD',
+      currencyLocale: quotes[0]?.currencyLocale || settings.currencyLocale || 'en-US'
     });
   } catch (err) {
     console.error('Error generating quotes:', err);
@@ -361,24 +293,9 @@ app.post('/api/rides/quotes', async (req, res) => {
   }
 });
 
-// Get all platform rides
-app.get('/api/rides', (req, res) => {
-  res.json(db.getRides());
-});
-
 // Get user ride history
 app.get('/api/rides/history/:userId', (req, res) => {
-  const userId = req.params.userId;
-  const driver = db.getDriverById(userId);
-  const driverId = driver ? driver.id : userId;
-  const driverUserId = driver?.userId || userId;
-
-  const rides = db.getRides().filter(r => 
-    r.riderId === userId || 
-    r.driverId === userId || 
-    r.driverId === driverId || 
-    r.driverId === driverUserId
-  );
+  const rides = db.getRides().filter(r => r.riderId === req.params.userId || r.driverId === req.params.userId);
   res.json(rides);
 });
 
@@ -401,23 +318,27 @@ app.get('/api/wallet/:userId', (req, res) => {
 
 // Top-up wallet
 app.post('/api/wallet/topup', (req, res) => {
-  const { userId, amount, paymentMethod = 'Card' } = req.body;
-  if (!amount || amount <= 0) return res.status(400).json({ error: 'Invalid amount' });
+  const { userId, paymentMethod = 'Card' } = req.body || {};
+  const amount = Number(req.body?.amount);
+  if (!Number.isFinite(amount) || amount <= 0 || amount > 10000) {
+    return res.status(400).json({ error: 'Amount must be between 0.01 and 10000' });
+  }
 
   const user = db.getUserById(userId);
   if (!user) return res.status(404).json({ error: 'User not found' });
 
+  const newBalance = Number(((user.walletBalance || 0) + amount).toFixed(2));
+  db.updateUser(userId, { walletBalance: newBalance });
+
   const tx = db.addTransaction({
     userId,
-    amount: parseFloat(amount),
+    amount: Number(amount.toFixed(2)),
     type: 'WALLET_TOPUP',
-    description: `Wallet Top-Up via ${paymentMethod}`
+    description: `Wallet Top-Up via ${String(paymentMethod).slice(0, 40)}`
   });
 
-  const updatedUser = db.getUserById(userId);
-
   res.json({
-    balance: updatedUser ? updatedUser.walletBalance : (user.walletBalance + parseFloat(amount)),
+    balance: newBalance,
     transaction: tx
   });
 });
@@ -429,7 +350,7 @@ app.get('/api/admin/metrics', (req, res) => {
   const completed = rides.filter(r => r.status === 'COMPLETED');
   
   const totalRevenue = completed.reduce((sum, r) => sum + (r.fare || 0), 0);
-  const platformRevenue = completed.reduce((sum, r) => sum + (r.platformFee || (r.fare * 0.2)), 0);
+  const platformRevenue = completed.reduce((sum, r) => sum + (r.platformFee ?? ((r.fare || 0) * 0.2)), 0);
 
   res.json({
     totalRides: rides.length,
@@ -447,38 +368,122 @@ app.get('/api/admin/metrics', (req, res) => {
 
 // Update Admin Settings (Surge, Commission)
 app.post('/api/admin/settings', (req, res) => {
-  const updated = db.updateSettings(req.body);
+  let updated;
+  try {
+    updated = db.updateSettings(req.body || {});
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
   io.emit('settings:updated', updated);
   res.json(updated);
 });
 
-// ---------------- IVR TELEPHONY & KEYPAD DISPATCH ROUTES ----------------
-
-// Initiate automated call to keypad phone
-app.post('/api/ivr/dispatch', (req, res) => {
-  const { driverPhone, driverId, ride } = req.body;
-  const call = ivrService.initiateKeypadDispatch({ driverPhone, driverId, ride });
-  res.json({ success: true, call });
+// Malformed JSON bodies and other middleware errors should be 4xx JSON, not HTML stack traces.
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  const status = err.status || err.statusCode || 500;
+  res.status(status).json({ error: status === 500 ? 'Internal server error' : err.message });
 });
 
-// Process DTMF keypad press (1: Accept, 2: Decline)
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason);
+});
+
+// ---------------- DRIVER DASHBOARD API ----------------
+
+// Wraps a driver route: resolves the driver (404 if unknown) and turns thrown errors into JSON.
+function driverRoute(handler, errorStatus = 500) {
+  return (req, res) => {
+    try {
+      const driver = db.resolveDriver(req.params.id);
+      if (!driver) return res.status(404).json({ error: 'Driver not found' });
+      return res.json(handler(driver, req));
+    } catch (err) {
+      return res.status(errorStatus).json({ error: err.message });
+    }
+  };
+}
+
+// Demand surge zones shown on the driver map
+app.get('/api/driver/heatmap', (req, res) => {
+  res.json(db.getDriverHeatmap());
+});
+
+app.get('/api/driver/:id/summary', driverRoute((driver) => db.getDriverSummary(driver.id)));
+
+app.get('/api/driver/:id/earnings', driverRoute((driver, req) =>
+  db.getDriverEarnings(driver.id, req.query.range === 'day' ? 'day' : 'week')
+));
+
+app.post('/api/driver/:id/cashout', driverRoute((driver, req) =>
+  db.recordCashout(driver.id, req.body?.amount, String(req.body?.method || 'INSTANT_BANK').slice(0, 40)),
+  400
+));
+
+app.get('/api/driver/:id/quests', driverRoute((driver) => db.getDriverQuests(driver.id)));
+
+app.post('/api/driver/:id/quests', driverRoute((driver, req) =>
+  db.claimQuest(driver.id, req.body?.questId),
+  400
+));
+
+app.get('/api/driver/:id/kyc', driverRoute((driver) => db.getDriverKyc(driver.id)));
+
+app.post('/api/driver/:id/kyc', driverRoute((driver, req) => {
+  const { docType, data } = req.body || {};
+  // Only document metadata may be updated by the driver; verification status is server-controlled.
+  const allowed = ['fileUrl', 'docNumber', 'expiryDate', 'fileName'];
+  const safeData = Object.fromEntries(
+    Object.entries(data || {}).filter(([key, value]) => allowed.includes(key) && typeof value === 'string')
+  );
+  return db.updateDriverKyc(driver.id, docType, safeData);
+}, 400));
+
+app.get('/api/driver/:id/destination', driverRoute((driver) => db.getDriverDestination(driver.id)));
+
+app.post('/api/driver/:id/destination', driverRoute((driver, req) =>
+  db.setDriverDestination(driver.id, {
+    enabled: Boolean(req.body?.enabled),
+    destination: req.body?.destination || null
+  }),
+  400
+));
+
+// ---------------- IVR KEYPAD DISPATCH (demo simulator) ----------------
+
+app.post('/api/ivr/dispatch', (req, res) => {
+  try {
+    const { driverPhone, driverId, ride } = req.body || {};
+    res.json({ success: true, call: ivrService.initiateKeypadDispatch({ driverPhone, driverId, ride }) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/ivr/keypad', (req, res) => {
-  const { callId, digit, driverId } = req.body;
+  const { callId, digit, driverId } = req.body || {};
   if (!callId || !digit) {
     return res.status(400).json({ error: 'callId and digit are required' });
   }
-  const result = ivrService.handleKeypadInput({ callId, digit, driverId });
-  res.json(result);
+  res.json(ivrService.handleKeypadInput({ callId, digit: String(digit), driverId }));
 });
 
-// Get active ringing calls
 app.get('/api/ivr/calls', (req, res) => {
-  res.json(ivrService.getActiveCalls());
+  if (!req.query.driverId) return res.status(400).json({ error: 'driverId is required' });
+  res.json({ calls: ivrService.getActiveCalls(String(req.query.driverId)) });
 });
 
-server.listen(PORT, () => {
-  console.log(`🚕 NexRide Server running on http://localhost:${PORT}`);
-  console.log(`📡 WebSocket ready on port ${PORT}`);
-});
+async function startServer() {
+  await db.initialize();
+  ivrService.setSocketIO(io);
+  setupSocketIO(io);
+  server.listen(PORT, () => {
+    console.log(`NexRide Server running on port ${PORT}`);
+    console.log(`WebSocket ready on port ${PORT}`);
+  });
+}
 
-module.exports = { app, server };
+startServer().catch((err) => {
+  console.error('Failed to initialize NexRide:', err);
+  process.exit(1);
+});

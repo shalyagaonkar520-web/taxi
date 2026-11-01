@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Phone, PhoneOff, PhoneCall, Volume2, MessageSquare, CheckCircle, X, Sparkles } from 'lucide-react';
 import { socket } from '../../services/socket';
+import { apiUrl } from '../../services/api';
 import { sound } from '../../utils/audio';
 
 export default function DriverKeypadCallSimulator({
@@ -48,7 +49,7 @@ export default function DriverKeypadCallSimulator({
   // Quick manual simulation trigger for testing
   const handleSimulateCall = async () => {
     try {
-      const res = await fetch('/api/ivr/dispatch', {
+      const res = await fetch(apiUrl('/ivr/dispatch'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -99,7 +100,7 @@ export default function DriverKeypadCallSimulator({
     try { sound.playBell(); } catch (e) {}
 
     try {
-      const res = await fetch('/api/ivr/keypad', {
+      const res = await fetch(apiUrl('/ivr/keypad'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -137,7 +138,7 @@ export default function DriverKeypadCallSimulator({
   // Hangup call
   const handleHangup = () => {
     if (activeCall) {
-      fetch('/api/ivr/keypad', {
+      fetch(apiUrl('/ivr/keypad'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

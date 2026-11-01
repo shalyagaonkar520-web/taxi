@@ -24,14 +24,17 @@ import {
   Zap
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { searchPlaces, getFareQuotes, topupWallet, reverseGeocodePlace, relocateDrivers } from '../../services/api';
+import { searchPlaces, getFareQuotes, topupWallet, reverseGeocodePlace, relocateDrivers, fetchNearbyPlaces } from '../../services/api';
 import { socket } from '../../services/socket';
 import { sound } from '../../utils/audio';
+import { formatCurrency, getCurrencyForLocation } from '../../utils/currency';
 
 export default function RiderView({
   user,
   drivers,
   activeRide,
+  settings,
+  onSettingsChange,
   onRideUpdate,
   onOpenWallet,
   onOpenHistory
@@ -51,7 +54,24 @@ export default function RiderView({
   const [destSuggestions, setDestSuggestions] = useState([]);
   const [activeInput, setActiveInput] = useState(null);
   const [locating, setLocating] = useState(false);
+  const [exploreMode, setExploreMode] = useState(false);
+  const [exploreCategory, setExploreCategory] = useState('tourism');
+  const [nearbyPlaces, setNearbyPlaces] = useState([]);
+  const [loadingPlaces, setLoadingPlaces] = useState(false);
   const destInputRef = useRef(null);
+
+    const quickDestinations = ['Airport', 'Mall', 'Station'];
+
+    useEffect(() => {
+      if (!exploreMode || !pickup?.lat || !pickup?.lng) return;
+      let active = true;
+      setLoadingPlaces(true);
+      fetchNearbyPlaces(pickup.lat, pickup.lng, exploreCategory)
+        .then((places) => { if (active) setNearbyPlaces(places || []); })
+        .catch(() => { if (active) setNearbyPlaces([]); })
+        .finally(() => { if (active) setLoadingPlaces(false); });
+      return () => { active = false; };
+    }, [exploreMode, exploreCategory, pickup?.lat, pickup?.lng]);
 
   // Auto-detect location on initial load if possible
   useEffect(() => {
@@ -63,6 +83,14 @@ export default function RiderView({
             const place = await reverseGeocodePlace(latitude, longitude);
             setPickup(place);
             setPickupQuery(place.name || place.address);
+            const detectedCurrency = getCurrencyForLocation(place.address || place.name || 'New York, NY');
+            if (onSettingsChange) {
+              onSettingsChange((prev) => ({
+                ...prev,
+                city: place.address || place.name || prev.city || 'New York, NY',
+                currencyCode: detectedCurrency.code
+              }));
+            }
             await relocateDrivers(latitude, longitude);
             if (onRideUpdate) {
               onRideUpdate({
@@ -94,6 +122,14 @@ export default function RiderView({
           const place = await reverseGeocodePlace(latitude, longitude);
           setPickup(place);
           setPickupQuery(place.name || place.address);
+          const detectedCurrency = getCurrencyForLocation(place.address || place.name || 'New York, NY');
+          if (onSettingsChange) {
+            onSettingsChange((prev) => ({
+              ...prev,
+              city: place.address || place.name || prev.city || 'New York, NY',
+              currencyCode: detectedCurrency.code
+            }));
+          }
           
           // Clear any previous destination to prevent mismatched cross-city routes
           setDestination(null);
@@ -150,6 +186,7 @@ export default function RiderView({
   const [paymentMethod, setPaymentMethod] = useState('WALLET');
   const [promoCode, setPromoCode] = useState('');
   const [discountPercent, setDiscountPercent] = useState(0);
+  const [rideError, setRideError] = useState('');
 
   // Rating & Tip Modal
   const [rating, setRating] = useState(5);
@@ -214,6 +251,10 @@ export default function RiderView({
       setChatMessages((prev) => [...prev, msg]);
     });
 
+    socket.on('ride:error', (err) => {
+      setRideError(err?.message || 'Something went wrong. Please try again.');
+    });
+
     return () => {
       socket.off('ride:created');
       socket.off('ride:cancelled');
@@ -222,6 +263,7 @@ export default function RiderView({
       socket.off('ride:started');
       socket.off('ride:completed');
       socket.off('chat:message');
+      socket.off('ride:error');
     };
   }, []);
 
@@ -263,7 +305,7 @@ export default function RiderView({
     } else {
       setDestQuery(query);
       if (query.length > 1) {
-        const results = await searchPlaces(query, destination?.lat, destination?.lng);
+        const results = await searchPlaces(query, pickup?.lat, pickup?.lng);
         setDestSuggestions(results);
       } else {
         setDestSuggestions([]);
@@ -287,13 +329,16 @@ export default function RiderView({
   // Request Ride
   const handleRequestRide = () => {
     sound.playRideRequest();
+    setRideError('');
     socket.emit('ride:request', {
       riderId: user?.id || 'rider-01',
       pickup,
       destination,
       category: selectedTier,
-      paymentMethod
+      paymentMethod,
+      promoCode: discountPercent > 0 ? 'SAVE20' : undefined
     });
+    setDiscountPercent(0);
   };
 
   // Send in-trip chat message
@@ -327,6 +372,8 @@ export default function RiderView({
   };
 
   const selectedQuote = quotes.find((q) => q.id === selectedTier) || quotes[0];
+  const cityLocation = destination?.address || pickup?.address || settings?.city || 'New York, NY';
+  const currencyInfo = getCurrencyForLocation(cityLocation, settings?.currencyCode || null);
   const finalFare = selectedQuote
     ? (selectedQuote.totalFare * (1 - discountPercent / 100)).toFixed(2)
     : '0.00';
@@ -487,6 +534,54 @@ export default function RiderView({
             </div>
           </div>
 
+          <div className="flex items-center gap-2 overflow-x-auto pb-1">
+            <span className="text-[11px] font-semibold text-gray-500 whitespace-nowrap">Popular:</span>
+            {quickDestinations.map((place) => (
+              <button
+                key={place}
+                type="button"
+                onClick={() => {
+                  setActiveInput('dest');
+                  setDestQuery(place);
+                  handleSearch(place, 'dest');
+                  destInputRef.current?.focus();
+                }}
+                className="whitespace-nowrap rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] font-semibold text-gray-300 transition hover:border-uber-accent/50 hover:bg-uber-accent/10 hover:text-white"
+              >
+                {place}
+              </button>
+            ))}
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold text-white">Explore nearby</p>
+                <p className="text-[11px] text-gray-400">Discover popular places within 50 km</p>
+              </div>
+              <button type="button" onClick={() => setExploreMode((enabled) => !enabled)} aria-pressed={exploreMode} className={`relative h-6 w-11 rounded-full transition ${exploreMode ? 'bg-uber-accent' : 'bg-white/15'}`}>
+                <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition ${exploreMode ? 'left-6' : 'left-1'}`} />
+              </button>
+            </div>
+            {exploreMode && (
+              <>
+                <div className="flex gap-2 mt-3">
+                  {[['tourism', 'Places'], ['food', 'Food']].map(([value, label]) => (
+                    <button key={value} type="button" onClick={() => setExploreCategory(value)} className={`rounded-lg px-3 py-1.5 text-[11px] font-semibold ${exploreCategory === value ? 'bg-uber-accent text-white' : 'bg-white/5 text-gray-400'}`}>{label}</button>
+                  ))}
+                </div>
+                <div className="mt-3 grid gap-2 max-h-48 overflow-y-auto">
+                  {loadingPlaces ? <p className="text-xs text-gray-500 py-3">Finding nearby recommendations...</p> : nearbyPlaces.length === 0 ? <p className="text-xs text-gray-500 py-3">No nearby places found yet. Try Places or Food.</p> : nearbyPlaces.map((place) => (
+                    <button key={`${place.name}-${place.lat}`} type="button" onClick={() => selectPlace(place, 'dest')} className="text-left rounded-xl border border-white/5 bg-black/20 px-3 py-2 hover:border-uber-accent/40">
+                      <div className="flex items-center justify-between gap-2"><span className="text-xs font-bold text-white truncate">{place.name}</span><span className="text-[10px] text-uber-accent whitespace-nowrap">{place.distanceKm} km</span></div>
+                      <p className="text-[10px] text-gray-500 truncate mt-0.5">{place.address}</p>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+
           {/* Vehicle Tier Picker (Only when destination is selected) */}
           {destination ? (
             <div className="flex flex-col gap-2">
@@ -530,7 +625,7 @@ export default function RiderView({
 
                       <div className="text-right">
                         <p className="text-base font-extrabold text-white">
-                          ${tier.totalFare}
+                          {formatCurrency(tier.totalFare, cityLocation, {}, settings?.currencyCode || null)}
                         </p>
                         {tier.surgeMultiplier > 1 && (
                           <span className="text-[10px] font-bold text-uber-gold flex items-center justify-end gap-0.5">
@@ -550,7 +645,7 @@ export default function RiderView({
                   className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-black/40 border border-white/10 hover:bg-white/5 text-gray-300 font-semibold"
                 >
                   <Wallet className="w-3.5 h-3.5 text-uber-accent" />
-                  <span>Wallet (${Number(user?.walletBalance || 0).toFixed(2)})</span>
+                  <span>Wallet ({formatCurrency(Number(user?.walletBalance || 0), cityLocation, {}, settings?.currencyCode || null)})</span>
                 </button>
 
                 <button
@@ -567,13 +662,19 @@ export default function RiderView({
                 </button>
               </div>
 
+              {rideError && (
+                <div role="alert" className="text-xs font-semibold text-red-300 bg-red-500/10 border border-red-500/30 rounded-xl px-3 py-2">
+                  {rideError}
+                </div>
+              )}
+
               {/* Request Button */}
               <button
                 onClick={handleRequestRide}
                 className="w-full py-4 rounded-2xl bg-gradient-to-r from-uber-accent to-blue-500 hover:from-uber-accentHover hover:to-blue-600 font-extrabold text-white text-base shadow-xl shadow-uber-accent/30 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
               >
                 <span>Request {selectedQuote?.name || 'Ride'}</span>
-                <span className="text-sm font-normal text-blue-200">(${finalFare})</span>
+                <span className="text-sm font-normal text-blue-200">({formatCurrency(finalFare, cityLocation, {}, settings?.currencyCode || null)})</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
             </div>
@@ -627,7 +728,7 @@ export default function RiderView({
 
           <div className="w-full bg-black/40 p-3 rounded-2xl border border-white/10 flex items-center justify-between text-xs">
             <span className="text-gray-400">Estimated Fare</span>
-            <span className="text-white font-extrabold">${activeRide.fare}</span>
+            <span className="text-white font-extrabold">{formatCurrency(activeRide.fare, activeRide.pickup?.address || activeRide.destination?.address || settings?.city || 'New York, NY', {}, settings?.currencyCode || null)}</span>
           </div>
 
           <button

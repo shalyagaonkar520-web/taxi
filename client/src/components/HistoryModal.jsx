@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Clock, X, MapPin, Download, Star, CheckCircle, Car } from 'lucide-react';
 import { fetchRideHistory } from '../services/api';
+import { formatCurrency } from '../utils/currency';
 
-export default function HistoryModal({ user, onClose }) {
+export default function HistoryModal({ user, settings, onClose }) {
   const [rides, setRides] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -58,7 +59,7 @@ export default function HistoryModal({ user, onClose }) {
                       {ride.status}
                     </span>
                   </div>
-                  <span className="text-sm font-extrabold text-white">${ride.fare}</span>
+                  <span className="text-sm font-extrabold text-white">{formatCurrency(ride.fare, ride.destination?.address || ride.pickup?.address || settings?.city || 'New York, NY', {}, settings?.currencyCode || null)}</span>
                 </div>
 
                 {/* Pickup & Destination */}

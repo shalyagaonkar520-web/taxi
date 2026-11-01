@@ -3,9 +3,17 @@ const db = require('../db');
 // In-memory active IVR calls registry
 const activeCalls = new Map();
 let ioInstance = null;
+// Ride actions are delegated to the socket layer so IVR responses follow the same
+// rules as the app (ride claiming, driver status, simulations).
+let handlers = { accept: null, decline: null };
+const CALL_TTL_MS = 60000;
 
 function setSocketIO(io) {
   ioInstance = io;
+}
+
+function setHandlers(next = {}) {
+  handlers = { ...handlers, ...next };
 }
 
 /**
@@ -38,12 +46,13 @@ function initiateKeypadDispatch({ driverPhone, driverId, ride }) {
   };
 
   activeCalls.set(callId, callData);
+  // Unanswered calls expire so the registry cannot grow without bound.
+  setTimeout(() => activeCalls.delete(callId), CALL_TTL_MS).unref();
 
   // Broadcast to driver via WebSocket
   try {
     if (ioInstance) {
       ioInstance.to(`user:${callData.driverId}`).emit('ivr:incoming_call', callData);
-      ioInstance.to('role:driver').emit('ivr:incoming_call', callData);
     }
   } catch (e) {
     console.warn('Socket broadcast warning in IVR:', e.message);
@@ -60,25 +69,26 @@ function handleKeypadInput({ callId, digit, driverId }) {
   if (!call) {
     return { success: false, error: 'Call not found or already expired' };
   }
+  if (driverId && driverId !== call.driverId) {
+    return { success: false, error: 'This call belongs to a different driver' };
+  }
 
   if (digit === '1') {
     // Driver Pressed 1: ACCEPT RIDE
     call.status = 'ACCEPTED';
     const ride = call.ride;
 
-    // Update ride in database
-    if (ride && ride.id) {
-      try {
-        db.updateRide(ride.id, {
-          status: 'ACCEPTED',
-          driverId: driverId || call.driverId
-        });
-      } catch (e) {
-        console.warn('Ride update warning in IVR:', e.message);
-      }
+    // Real rides are accepted through the same path as the app; demo calls have no ride record.
+    const realRide = ride && ride.id ? db.getRideById(ride.id) : null;
+    if (realRide && handlers.accept) {
+      Promise.resolve(handlers.accept(realRide.id, call.driverId)).catch((e) =>
+        console.warn('IVR ride accept failed:', e.message)
+      );
     }
 
-    const confirmationSMS = `NEXRIDE: ಸವಾರಿ ದೃಢಪಟ್ಟಿದೆ! ಪ್ರಯಾಣಿಕರು: ${ride?.riderName || 'ಪ್ರಿಯಾ'}. ಪಿಕಪ್: ${ride?.pickup || 'MPN Altius'}. ಒಟಿಪಿ: ${ride?.otp || '4928'}. ಶುಲ್ಕ: ₹${ride?.fare || 65}.`;
+    // The security PIN stays with the rider; it is only echoed for the built-in demo ride.
+    const pinText = realRide ? '' : ` ಒಟಿಪಿ: ${ride?.otp || '4928'}.`;
+    const confirmationSMS = `NEXRIDE: ಸವಾರಿ ದೃಢಪಟ್ಟಿದೆ! ಪ್ರಯಾಣಿಕರು: ${ride?.riderName || 'ಪ್ರಿಯಾ'}. ಪಿಕಪ್: ${ride?.pickup || 'MPN Altius'}.${pinText} ಶುಲ್ಕ: ₹${ride?.fare || 65}.`;
 
     const result = {
       success: true,
@@ -92,10 +102,6 @@ function handleKeypadInput({ callId, digit, driverId }) {
     try {
       if (ioInstance) {
         ioInstance.to(`user:${call.driverId}`).emit('ivr:call_ended', result);
-        ioInstance.to('role:driver').emit('ivr:call_ended', result);
-        if (ride && ride.id) {
-          ioInstance.to(`ride:${ride.id}`).emit('ride:accepted_confirmation', { ride });
-        }
       }
     } catch (e) {}
 
@@ -105,6 +111,9 @@ function handleKeypadInput({ callId, digit, driverId }) {
   } else if (digit === '2') {
     // Driver Pressed 2: DECLINE RIDE
     call.status = 'DECLINED';
+    if (call.ride?.id && handlers.decline) {
+      Promise.resolve(handlers.decline(call.ride.id, call.driverId)).catch(() => {});
+    }
     const result = {
       success: true,
       action: 'DECLINED',
@@ -116,7 +125,6 @@ function handleKeypadInput({ callId, digit, driverId }) {
     try {
       if (ioInstance) {
         ioInstance.to(`user:${call.driverId}`).emit('ivr:call_ended', result);
-        ioInstance.to('role:driver').emit('ivr:call_ended', result);
       }
     } catch (e) {}
 
@@ -137,12 +145,13 @@ function handleKeypadInput({ callId, digit, driverId }) {
 /**
  * Returns currently ringing or active calls
  */
-function getActiveCalls() {
-  return Array.from(activeCalls.values());
+function getActiveCalls(driverId) {
+  return Array.from(activeCalls.values()).filter((call) => !driverId || call.driverId === driverId);
 }
 
 module.exports = {
   setSocketIO,
+  setHandlers,
   initiateKeypadDispatch,
   handleKeypadInput,
   getActiveCalls

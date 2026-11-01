@@ -10,10 +10,10 @@ build/
 
 # Environment Variables
 .env
-.env*
-.env.*
-.env.example
-server/.env.example
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 
 # Logs
 npm-debug.log*
@@ -25,8 +25,6 @@ lerna-debug.log*
 # Database & Runtime
 *.db
 *.db-journal
-*.db-shm
-*.db-wal
 *.sqlite
 server/data/*.db
 
@@ -35,3 +33,6 @@ server/data/*.db
 Thumbs.db
 .idea/
 .vscode/
+
+# Local run logs
+*.log

@@ -18,12 +18,15 @@ import {
 } from 'lucide-react';
 import { fetchAdminMetrics, updateAdminSettings, fetchUsers } from '../../services/api';
 import { socket } from '../../services/socket';
+import { formatCurrency } from '../../utils/currency';
 import MapControls from './MapControls';
 import DriverDrawer from './DriverDrawer';
 import RiderDrawer from './RiderDrawer';
 
 export default function AdminView({
   drivers = [],
+  settings,
+  onSettingsChange,
   isConnected = true,
   onCenterMap,
   entityFilter = 'BOTH',
@@ -43,8 +46,26 @@ export default function AdminView({
   const [loading, setLoading] = useState(true);
   const [surge, setSurge] = useState(1.0);
   const [commission, setCommission] = useState(20);
+  const [city, setCity] = useState('New York, NY');
+  const [currencyCode, setCurrencyCode] = useState('USD');
   const [saveStatus, setSaveStatus] = useState('');
   const [activeTab, setActiveTab] = useState('OPERATIONS'); // 'OPERATIONS' | 'METRICS'
+  const [sosAlert, setSosAlert] = useState(null);
+
+  // Emergency SOS broadcasts from riders/drivers
+  useEffect(() => {
+    let clearTimer = null;
+    const handleSosAlert = (data) => {
+      setSosAlert(data);
+      clearTimeout(clearTimer);
+      clearTimer = setTimeout(() => setSosAlert(null), 10000);
+    };
+    socket.on('admin:sos_alert', handleSosAlert);
+    return () => {
+      clearTimeout(clearTimer);
+      socket.off('admin:sos_alert', handleSosAlert);
+    };
+  }, []);
 
   // Load metrics and users
   const loadMetrics = async () => {
@@ -77,6 +98,9 @@ export default function AdminView({
       if (metricsData?.settings) {
         setSurge(metricsData.settings.surgeMultiplier || 1.0);
         setCommission(metricsData.settings.platformCommissionPercent || 20);
+        setCity(metricsData.settings.city || 'New York, NY');
+        setCurrencyCode(metricsData.settings.currencyCode || 'USD');
+        if (onSettingsChange) onSettingsChange(metricsData.settings);
       }
     } catch (err) {
       console.error('Failed to fetch admin data:', err);
@@ -85,46 +109,9 @@ export default function AdminView({
     }
   };
 
-  const [sosAlert, setSosAlert] = useState(null);
-
   useEffect(() => {
     loadMetrics();
 
-    // Listen to live ride events across all panels
-    const handleRideEvent = (event) => {
-      loadMetrics();
-    };
-
-    // Listen to settings changes saved by any admin
-    const handleSettingsUpdated = (newSettings) => {
-      if (newSettings) {
-        if (newSettings.surgeMultiplier !== undefined) setSurge(newSettings.surgeMultiplier);
-        if (newSettings.platformCommissionPercent !== undefined) setCommission(newSettings.platformCommissionPercent);
-        loadMetrics();
-      }
-    };
-
-    // Listen to driver status changes
-    const handleDriverStatus = () => {
-      loadMetrics();
-    };
-
-    // Listen to emergency SOS broadcasts
-    const handleSosAlert = (data) => {
-      setSosAlert(data);
-      setTimeout(() => setSosAlert(null), 10000);
-    };
-
-    socket.on('admin:ride_event', handleRideEvent);
-    socket.on('settings:updated', handleSettingsUpdated);
-    socket.on('driver:status_changed', handleDriverStatus);
-    socket.on('admin:sos_alert', handleSosAlert);
-
-    return () => {
-      socket.off('admin:ride_event', handleRideEvent);
-      socket.off('settings:updated', handleSettingsUpdated);
-      socket.off('driver:status_changed', handleDriverStatus);
-      socket.off('admin:sos_alert', handleSosAlert);
     // Listen to live ride events
     const handleRideEvent = (event) => {
       const { type, ride } = event || {};
@@ -152,6 +139,8 @@ export default function AdminView({
     socket.on('settings:updated', (updated) => {
       if (updated.surgeMultiplier) setSurge(updated.surgeMultiplier);
       if (updated.platformCommissionPercent) setCommission(updated.platformCommissionPercent);
+      if (updated.city) setCity(updated.city);
+      if (updated.currencyCode) setCurrencyCode(updated.currencyCode);
     });
 
     return () => {
@@ -247,10 +236,13 @@ export default function AdminView({
   const handleSaveSettings = async () => {
     try {
       setSaveStatus('Saving...');
-      await updateAdminSettings({
+      const updatedSettings = await updateAdminSettings({
         surgeMultiplier: parseFloat(surge),
-        platformCommissionPercent: parseInt(commission, 10)
+        platformCommissionPercent: parseInt(commission, 10),
+        city: city.trim() || 'New York, NY',
+        currencyCode: currencyCode || 'USD'
       });
+      if (onSettingsChange && updatedSettings) onSettingsChange(updatedSettings);
       setSaveStatus('Saved!');
       setTimeout(() => setSaveStatus(''), 2000);
     } catch (err) {
@@ -283,16 +275,16 @@ export default function AdminView({
   const ridersWithCoordsCount = derivedRiders.length;
 
   return (
-    <div className="w-full max-w-4xl mx-auto flex flex-col gap-6 animate-in fade-in duration-300">
-      
-      {/* SOS EMERGENCY DISPATCH ALERT BANNER */}
+    <div className="w-full flex flex-col gap-4 animate-in fade-in duration-300">
       {sosAlert && (
-        <div className="p-4 rounded-3xl bg-red-500/20 border-2 border-red-500/80 text-white flex items-center justify-between shadow-2xl animate-bounce">
+        <div role="alert" className="p-4 rounded-3xl bg-red-500/20 border-2 border-red-500/80 text-white flex items-center justify-between shadow-2xl">
           <div className="flex items-center gap-3">
             <span className="text-2xl">🚨</span>
             <div>
-              <h4 className="text-sm font-black text-red-300">EMERGENCY SOS BROADCAST</h4>
-              <p className="text-xs text-white">Ride ID: {sosAlert.rideId} • {sosAlert.note || 'Emergency assistance requested'}</p>
+              <h4 className="text-sm font-black text-red-300">EMERGENCY SOS</h4>
+              <p className="text-xs text-white">
+                {sosAlert.userName || 'A user'}{sosAlert.rideId ? ` • Ride ${sosAlert.rideId}` : ''} • {sosAlert.note || 'Emergency assistance requested'}
+              </p>
             </div>
           </div>
           <button onClick={() => setSosAlert(null)} className="px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-xs font-bold text-white">
@@ -300,34 +292,6 @@ export default function AdminView({
           </button>
         </div>
       )}
-
-      {/* ADMIN SYNC STATUS BADGE */}
-      <div className="flex items-center justify-between text-xs text-gray-400 px-1">
-        <div className="flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="font-semibold text-gray-300">Connected to Dispatch Engine • All Admins Synced</span>
-        </div>
-        <span className="text-[11px] font-mono text-gray-500">Auto-refresh on live ride & settings events</span>
-      </div>
-
-      {/* 1. METRICS CARDS */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Total Gross Revenue */}
-        <div className="glass-card p-5 rounded-3xl border border-white/10 flex flex-col gap-2">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Gross Volume</span>
-            <div className="w-8 h-8 rounded-xl bg-uber-green/20 text-uber-green flex items-center justify-center">
-              <DollarSign className="w-4 h-4" />
-            </div>
-          </div>
-          <p className="text-2xl font-extrabold text-white">
-            ${metrics?.totalRevenue || '342.80'}
-          </p>
-          <span className="text-[11px] text-uber-green font-semibold flex items-center gap-1">
-            <TrendingUp className="w-3.5 h-3.5" /> +18.4% today
-          </span>
-        </div>
-    <div className="w-full flex flex-col gap-4 animate-in fade-in duration-300">
       {/* Top Operations / Analytics Mode Switcher */}
       <div className="p-1 rounded-2xl bg-black/60 backdrop-blur-xl border border-white/10 flex items-center gap-1 shadow-lg">
         <button
@@ -557,7 +521,7 @@ export default function AdminView({
                 </div>
               </div>
               <p className="text-2xl font-extrabold text-white">
-                ${metrics?.totalRevenue !== undefined ? metrics.totalRevenue : '342.80'}
+                {formatCurrency(metrics?.totalRevenue ?? 0, settings?.city, {}, settings?.currencyCode)}
               </p>
               <span className="text-[11px] text-uber-green font-semibold flex items-center gap-1">
                 <TrendingUp className="w-3.5 h-3.5" /> +18.4% today
@@ -573,7 +537,7 @@ export default function AdminView({
                 </div>
               </div>
               <p className="text-2xl font-extrabold text-purple-300">
-                ${metrics?.platformRevenue !== undefined ? metrics.platformRevenue : '68.56'}
+                {formatCurrency(metrics?.platformRevenue ?? 0, settings?.city, {}, settings?.currencyCode)}
               </p>
               <span className="text-[11px] text-gray-400 font-semibold">
                 Net dispatch earnings
@@ -629,6 +593,30 @@ export default function AdminView({
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+              <div className="flex flex-col gap-3 bg-black/40 p-4 rounded-2xl border border-white/10">
+                <label className="flex flex-col gap-2 text-xs font-bold text-gray-300">
+                  <span>City / Location</span>
+                  <input
+                    value={city}
+                    onChange={(e) => setCity(e.target.value)}
+                    className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-white outline-none focus:border-uber-accent"
+                    placeholder="New York, NY"
+                  />
+                </label>
+                <label className="flex flex-col gap-2 text-xs font-bold text-gray-300">
+                  <span>Currency</span>
+                  <select
+                    value={currencyCode}
+                    onChange={(e) => setCurrencyCode(e.target.value)}
+                    className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-white outline-none focus:border-uber-accent"
+                  >
+                    {['USD', 'INR', 'GBP', 'EUR', 'CAD', 'AUD'].map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
               {/* Surge Multiplier Slider */}
               <div className="flex flex-col gap-2 bg-black/40 p-4 rounded-2xl border border-white/10">
                 <div className="flex items-center justify-between text-xs font-bold">
@@ -727,7 +715,7 @@ export default function AdminView({
                     </div>
 
                     <div className="text-right">
-                      <p className="text-sm font-extrabold text-white">${ride.fare}</p>
+                      <p className="text-sm font-extrabold text-white">{formatCurrency(ride.fare, settings?.city, {}, settings?.currencyCode)}</p>
                       <p className="text-[10px] text-gray-500 font-semibold">
                         {new Date(ride.createdAt).toLocaleTimeString([], {
                           hour: '2-digit',

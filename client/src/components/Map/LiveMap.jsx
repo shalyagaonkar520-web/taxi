@@ -99,7 +99,7 @@ const createRiderIcon = (status = 'REQUESTED', isSelected = false) => {
 
 const createPointIcon = (type = 'pickup') => {
   const isPickup = type === 'pickup';
-  const color = isPickup ? '#276EF1' : '#E11900';
+  const color = isPickup ? '#06C167' : '#E11900';
   const label = isPickup ? 'A' : 'B';
 
   const svg = `
@@ -131,7 +131,6 @@ export default function LiveMap({
   assignedDriverId = null,
   heatmapZones = [],
   showHeatmap = false,
-  onMapClick = null
   onMapClick = null,
   // Optional Live Operations features (with backward-compatible defaults)
   entityFilter = 'BOTH', // 'CABS' | 'RIDERS' | 'BOTH'
@@ -179,7 +178,11 @@ export default function LiveMap({
 
     mapInstanceRef.current = map;
 
+    // Recalculate size after first render so tiles fill the container
+    const sizeTimer = setTimeout(() => map.invalidateSize(), 250);
+
     return () => {
+      clearTimeout(sizeTimer);
       map.remove();
       mapInstanceRef.current = null;
     };
@@ -457,7 +460,7 @@ export default function LiveMap({
     }
   }, [driverRouteCoordinates, activeLayers?.trips]);
 
-  // Render Demand Surge Heatmap Zones
+  // Render Demand Surge Heatmap Zones (driver workspace)
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map) return;
@@ -469,9 +472,10 @@ export default function LiveMap({
 
     if (showHeatmap && heatmapZones && heatmapZones.length > 0) {
       heatmapZones.forEach((zone) => {
+        const color = zone.color || '#EF4444';
         const circle = L.circle([zone.lat, zone.lng], {
-          color: zone.color || '#EF4444',
-          fillColor: zone.color || '#EF4444',
+          color,
+          fillColor: color,
           fillOpacity: 0.22,
           weight: 2,
           radius: zone.radius || 1200
@@ -479,8 +483,8 @@ export default function LiveMap({
 
         const badgeIcon = L.divIcon({
           html: `
-            <div style="background: rgba(18, 18, 22, 0.92); border: 1.5px solid ${zone.color}; color: #FFFFFF; padding: 2px 7px; border-radius: 9999px; font-size: 10px; font-weight: 800; display: inline-flex; align-items: center; gap: 4px; box-shadow: 0 4px 14px rgba(0,0,0,0.6); white-space: nowrap; pointer-events: auto; cursor: pointer;">
-              <span style="color: ${zone.color}; font-size: 11px;">⚡</span>
+            <div style="background: rgba(18, 18, 22, 0.92); border: 1.5px solid ${color}; color: #FFFFFF; padding: 2px 7px; border-radius: 9999px; font-size: 10px; font-weight: 800; display: inline-flex; align-items: center; gap: 4px; box-shadow: 0 4px 14px rgba(0,0,0,0.6); white-space: nowrap; pointer-events: auto; cursor: pointer;">
+              <span style="color: ${color}; font-size: 11px;">⚡</span>
               <span>${zone.surgeMultiplier}x</span>
               <span style="color: #9CA3AF; font-size: 9px; font-weight: 600;">${zone.name}</span>
             </div>
@@ -492,7 +496,7 @@ export default function LiveMap({
         const badge = L.marker([zone.lat, zone.lng], { icon: badgeIcon }).addTo(map);
         badge.bindPopup(`
           <div style="color: #111; font-size: 12px; font-weight: 700;">
-            <p style="margin: 0; font-size: 13px; color: ${zone.color};">${zone.surgeMultiplier}x Surge Zone</p>
+            <p style="margin: 0; font-size: 13px; color: ${color};">${zone.surgeMultiplier}x Surge Zone</p>
             <p style="margin: 4px 0 0 0; font-weight: 500; font-size: 11px; color: #4B5563;">${zone.description}</p>
           </div>
         `);

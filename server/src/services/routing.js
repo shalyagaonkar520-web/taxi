@@ -11,7 +11,7 @@ function fetchJson(url, options = {}) {
         'User-Agent': 'NexRide-TaxiPlatform/1.0 (contact@nexride.app)',
         ...options.headers
       },
-      timeout: 1500
+      timeout: 6000
     }, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);
@@ -148,10 +148,13 @@ async function searchPlaces(query, centerLat, centerLng) {
     { name: 'LaGuardia Airport (LGA)', address: 'Queens, NY 11371', lat: 40.776927, lng: -73.873966 }
   ];
 
-  const matchedLocal = KNOWN_PLACES.filter(p => 
-    p.name.toLowerCase().includes(query.toLowerCase()) || 
-    p.address.toLowerCase().includes(query.toLowerCase())
-  );
+  const matchedLocal = KNOWN_PLACES.filter(p => {
+    const matchesQuery = p.name.toLowerCase().includes(query.toLowerCase()) ||
+      p.address.toLowerCase().includes(query.toLowerCase());
+    const isNearby = centerLat == null || centerLng == null ||
+      calculateHaversineDistance(centerLat, centerLng, p.lat, p.lng) <= 50;
+    return matchesQuery && isNearby;
+  });
 
   // Try Photon geocoding API first (fast & reliable)
   try {
@@ -186,7 +189,10 @@ async function searchPlaces(query, centerLat, centerLng) {
   } catch (err) {
     // Try Nominatim as fallback
     try {
-      const nomUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=6`;
+      const nearbyViewbox = centerLat != null && centerLng != null
+        ? `&viewbox=${centerLng - 0.5},${centerLat + 0.5},${centerLng + 0.5},${centerLat - 0.5}&bounded=1`
+        : '';
+      const nomUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=6${nearbyViewbox}`;
       const results = await fetchJson(nomUrl);
       if (Array.isArray(results) && results.length > 0) {
         return results.map(r => ({

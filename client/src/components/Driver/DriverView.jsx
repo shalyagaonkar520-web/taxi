@@ -18,6 +18,7 @@ import {
   X
 } from 'lucide-react';
 import { socket } from '../../services/socket';
+import { apiUrl } from '../../services/api';
 import { sound } from '../../utils/audio';
 
 // Subcomponents
@@ -88,11 +89,11 @@ export default function DriverView({
     setLoading(true);
     try {
       const [summaryRes, earningsRes, questsRes, kycRes, destRes] = await Promise.all([
-        fetch(`/api/driver/${driverId}/summary`).then(r => r.ok ? r.json() : null),
-        fetch(`/api/driver/${driverId}/earnings?range=${earningsRange}`).then(r => r.ok ? r.json() : null),
-        fetch(`/api/driver/${driverId}/quests`).then(r => r.ok ? r.json() : null),
-        fetch(`/api/driver/${driverId}/kyc`).then(r => r.ok ? r.json() : null),
-        fetch(`/api/driver/${driverId}/destination`).then(r => r.ok ? r.json() : null)
+        fetch(apiUrl(`/driver/${driverId}/summary`)).then(r => r.ok ? r.json() : null),
+        fetch(apiUrl(`/driver/${driverId}/earnings?range=${earningsRange}`)).then(r => r.ok ? r.json() : null),
+        fetch(apiUrl(`/driver/${driverId}/quests`)).then(r => r.ok ? r.json() : null),
+        fetch(apiUrl(`/driver/${driverId}/kyc`)).then(r => r.ok ? r.json() : null),
+        fetch(apiUrl(`/driver/${driverId}/destination`)).then(r => r.ok ? r.json() : null)
       ]);
 
       if (summaryRes) setSummaryData(summaryRes);
@@ -140,6 +141,12 @@ export default function DriverView({
       setIncomingRequest(null);
     };
 
+    const handleRideCancelled = () => {
+      onRideUpdate(null);
+      setIncomingRequest(null);
+      loadDriverData();
+    };
+
     const handleCancelledByRider = (data) => {
       alert(data.message || (isKannada ? 'ಪ್ರಯಾಣಿಕರು ಈ ಸವಾರಿಯನ್ನು ರದ್ದುಗೊಳಿಸಿದ್ದಾರೆ.' : 'The rider has cancelled this trip.'));
       onRideUpdate(null);
@@ -154,6 +161,7 @@ export default function DriverView({
     socket.on('ride:request_closed', handleRequestClosed);
     socket.on('ride:request_cancelled', handleRequestClosed);
     socket.on('ride:cancelled_by_rider', handleCancelledByRider);
+    socket.on('ride:cancelled', handleRideCancelled);
 
     return () => {
       socket.off('ride:incoming_request', handleIncomingRequest);
@@ -164,6 +172,7 @@ export default function DriverView({
       socket.off('ride:request_closed', handleRequestClosed);
       socket.off('ride:request_cancelled', handleRequestClosed);
       socket.off('ride:cancelled_by_rider', handleCancelledByRider);
+      socket.off('ride:cancelled', handleRideCancelled);
     };
   }, [driverId, onRideUpdate, isKannada]);
 
@@ -211,7 +220,7 @@ export default function DriverView({
   const handleUpdateDestination = async (destState) => {
     setDestinationMode(destState);
     try {
-      await fetch(`/api/driver/${driverId}/destination`, {
+      await fetch(apiUrl(`/driver/${driverId}/destination`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(destState)
@@ -233,7 +242,7 @@ export default function DriverView({
   // Cashout action
   const handleCashout = async (amount, method) => {
     try {
-      const res = await fetch(`/api/driver/${driverId}/cashout`, {
+      const res = await fetch(apiUrl(`/driver/${driverId}/cashout`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ amount, method })
@@ -247,7 +256,7 @@ export default function DriverView({
   // Claim Quest / Scratch Card Bonus
   const handleClaimBonus = async (amount) => {
     try {
-      await fetch(`/api/driver/${driverId}/cashout`, {
+      await fetch(apiUrl(`/driver/${driverId}/cashout`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ amount: -amount, method: 'REWARD_BONUS' })
@@ -259,7 +268,7 @@ export default function DriverView({
   // Upload KYC
   const handleUploadKyc = async (docType, fileData) => {
     try {
-      const res = await fetch(`/api/driver/${driverId}/kyc`, {
+      const res = await fetch(apiUrl(`/driver/${driverId}/kyc`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ docType, data: fileData })
@@ -273,13 +282,11 @@ export default function DriverView({
 
   // SOS Emergency Trigger
   const handleTriggerSOS = () => {
-    socket.emit('admin:sos_alert', {
-      rideId: activeRide?.id || 'NO_RIDE',
-      riderId: activeRide?.riderId || 'N/A',
-      driverId,
-      driverName: driver?.name || 'Shekar kulal n',
-      location: { lat: 12.9716, lng: 77.5946 },
-      timestamp: new Date().toISOString()
+    socket.emit('ride:sos', {
+      rideId: activeRide?.id || null,
+      userId: driverId,
+      location: driver?.location || null,
+      note: 'Driver SOS emergency button triggered'
     });
 
     setSosBanner(isKannada ? 'ತುರ್ತು SOS ಎಚ್ಚರಿಕೆಯನ್ನು ಕಂಟ್ರೋಲ್ ರೂಮ್‌ಗೆ ಕಳುಹಿಸಲಾಗಿದೆ!' : 'Emergency SOS alert dispatched to Central Control Room!');
