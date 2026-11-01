@@ -15,6 +15,25 @@ jobs:
   validate:
     name: Install, build, and smoke test
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/nexride_dev
+      ADMIN_EMAIL: admin@nexride.com
+      ADMIN_PASSWORD: ci-admin-password
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: nexride_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d nexride_dev"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout
@@ -62,6 +81,14 @@ jobs:
             sleep 1
           done
           grep -q '"status":"ok"' health.json
+
+      - name: Verify authentication
+        run: |
+          curl --fail --silent \
+            -H 'Content-Type: application/json' \
+            --data '{"email":"admin@nexride.com","password":"ci-admin-password","role":"ADMIN"}' \
+            http://localhost:5000/api/auth/login > login.json
+          grep -q '"role":"ADMIN"' login.json
 
       - name: Upload server log on failure
         if: failure()

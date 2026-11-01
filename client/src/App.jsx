@@ -6,14 +6,16 @@ import DriverView from './components/Driver/DriverView';
 import AdminView from './components/Admin/AdminView';
 import WalletModal from './components/WalletModal';
 import HistoryModal from './components/HistoryModal';
+import ProfileModal from './components/ProfileModal';
+import LoginView from './components/LoginView';
 import { socket, registerUser } from './services/socket';
-import { fetchUsers, fetchDrivers, fetchActiveRide } from './services/api';
+import { fetchDrivers, fetchActiveRide } from './services/api';
 
 function getRoleFromPath() {
   const path = window.location.pathname.toLowerCase().replace(/\/+$/, '');
   if (path === '/driver' || path.startsWith('/driver/')) return 'DRIVER';
   if (path === '/admin' || path.startsWith('/admin/')) return 'ADMIN';
-  if (path === '/rider' || path.startsWith('/rider/')) return 'RIDER';
+  if (path === '/user' || path.startsWith('/user/') || path === '/rider' || path.startsWith('/rider/')) return 'RIDER';
   return null;
 }
 
@@ -26,7 +28,7 @@ function RoleLauncher() {
         <p className="text-gray-400 mb-8">Each role has its own dedicated application.</p>
         <div className="grid gap-4 md:grid-cols-3">
           {[
-            { role: 'rider', label: 'Rider', description: 'Book and track rides', color: 'bg-uber-accent' },
+            { role: 'user', label: 'User', description: 'Book and track rides', color: 'bg-uber-accent' },
             { role: 'driver', label: 'Driver', description: 'Manage trips and earnings', color: 'bg-uber-green' },
             { role: 'admin', label: 'Admin', description: 'Monitor the entire fleet', color: 'bg-purple-600' }
           ].map((item) => (
@@ -46,6 +48,7 @@ function RoleLauncher() {
 }
 
 function RoleApp({ role }) {
+  const [authenticatedUser, setAuthenticatedUser] = useState(null);
   const [currentUser, setCurrentUser] = useState(null);
   const [drivers, setDrivers] = useState([]);
   const [activeRide, setActiveRide] = useState(null);
@@ -53,11 +56,13 @@ function RoleApp({ role }) {
   const [previewPickup, setPreviewPickup] = useState(null);
   const [previewDestination, setPreviewDestination] = useState(null);
   const [mapCenter, setMapCenter] = useState([12.9716, 77.5946]);
+  const [settings, setSettings] = useState({ city: 'New York, NY', currencyCode: 'USD' });
   const [isConnected, setIsConnected] = useState(socket.connected);
 
   // Modals
   const [showWalletModal, setShowWalletModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [showProfileModal, setShowProfileModal] = useState(false);
 
   // Admin Live Operations Center state
   const [adminEntityFilter, setAdminEntityFilter] = useState('BOTH');
@@ -70,29 +75,27 @@ function RoleApp({ role }) {
     setAdminLayers((prev) => ({ ...prev, [layerKey]: !prev[layerKey] }));
   };
 
-  // Initial Load
+  // Load shared fleet data after the user signs in.
   useEffect(() => {
+    if (!authenticatedUser) return;
+
     async function initData() {
       try {
-        const [allUsers, allDrivers] = await Promise.all([
-          fetchUsers(),
-          fetchDrivers()
-        ]);
+        const allDrivers = await fetchDrivers();
         setDrivers(allDrivers);
 
-        const initialUser = allUsers.find(u => u.role === role) || allUsers[0];
-        setCurrentUser(initialUser);
-        registerUser(initialUser.id, role);
+        setCurrentUser(authenticatedUser);
+        registerUser(authenticatedUser.id, role);
 
         // Check active ride
-        const active = await fetchActiveRide(initialUser.id);
+        const active = await fetchActiveRide(authenticatedUser.id);
         if (active) setActiveRide(active);
       } catch (err) {
         console.error('Failed to load initial data:', err);
       }
     }
     initData();
-  }, [role]);
+  }, [role, authenticatedUser]);
 
   // Handle Socket Connection & Real-Time Sync
   useEffect(() => {
@@ -112,6 +115,11 @@ function RoleApp({ role }) {
     socket.on('init:state', (data) => {
       if (data.drivers) setDrivers(data.drivers);
       if (data.activeRide) setActiveRide(data.activeRide);
+      if (data.settings) setSettings(data.settings);
+    });
+
+    socket.on('settings:updated', (updated) => {
+      if (updated) setSettings(updated);
     });
 
     // Driver location movements
@@ -136,6 +144,7 @@ function RoleApp({ role }) {
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
       socket.off('init:state');
+      socket.off('settings:updated');
       socket.off('driver:moved');
       socket.off('driver:status_changed');
     };
@@ -174,6 +183,10 @@ function RoleApp({ role }) {
   const mapRoute = activeRide?.routeCoordinates || previewRoute;
   const driverRoute = activeRide?.driverRouteCoordinates || [];
 
+  if (!authenticatedUser) {
+    return <LoginView role={role} onLogin={setAuthenticatedUser} />;
+  }
+
   return (
     <div className="relative w-screen h-screen flex flex-col overflow-hidden bg-[#09090b]">
       {/* Top Navbar */}
@@ -181,8 +194,10 @@ function RoleApp({ role }) {
         currentRole={role}
         user={currentUser}
         walletBalance={currentUser?.walletBalance}
+        settings={settings}
         onOpenWallet={() => setShowWalletModal(true)}
         onOpenHistory={() => setShowHistoryModal(true)}
+        onOpenProfile={() => setShowProfileModal(true)}
         isConnected={isConnected}
       />
 
@@ -196,6 +211,8 @@ function RoleApp({ role }) {
               user={currentUser}
               drivers={drivers}
               activeRide={activeRide}
+              settings={settings}
+              onSettingsChange={setSettings}
               onRideUpdate={handleRiderUpdate}
               onOpenWallet={() => setShowWalletModal(true)}
               onOpenHistory={() => setShowHistoryModal(true)}
@@ -219,6 +236,8 @@ function RoleApp({ role }) {
             <div className="w-full">
               <AdminView
                 drivers={drivers}
+                settings={settings}
+                onSettingsChange={setSettings}
                 isConnected={isConnected}
                 onCenterMap={setMapCenter}
                 entityFilter={adminEntityFilter}
@@ -263,6 +282,7 @@ function RoleApp({ role }) {
       {showWalletModal && (
         <WalletModal
           user={currentUser}
+          settings={settings}
           onClose={() => setShowWalletModal(false)}
           onBalanceUpdate={(newBalance) => {
             setCurrentUser((prev) => ({ ...prev, walletBalance: newBalance }));
@@ -274,7 +294,19 @@ function RoleApp({ role }) {
       {showHistoryModal && (
         <HistoryModal
           user={currentUser}
+          settings={settings}
           onClose={() => setShowHistoryModal(false)}
+        />
+      )}
+
+      {showProfileModal && (
+        <ProfileModal
+          user={currentUser}
+          onClose={() => setShowProfileModal(false)}
+          onProfileUpdate={(updated) => {
+            setCurrentUser(updated);
+            setAuthenticatedUser(updated);
+          }}
         />
       )}
     </div>

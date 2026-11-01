@@ -1,9 +1,12 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
+const { Pool } = require('pg');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
+const DATABASE_URL = process.env.DATABASE_URL;
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -194,13 +197,201 @@ const INITIAL_DATA = {
     platformCommissionPercent: 20,
     autoDispatchEnabled: true,
     currencySymbol: '$',
+    currencyCode: 'USD',
+    currencyLocale: 'en-US',
     city: 'New York, NY'
   }
+};
+
+const SUPPORTED_CURRENCIES = {
+  USD: { code: 'USD', symbol: '$', locale: 'en-US' },
+  INR: { code: 'INR', symbol: '₹', locale: 'en-IN' },
+  GBP: { code: 'GBP', symbol: '£', locale: 'en-GB' },
+  EUR: { code: 'EUR', symbol: '€', locale: 'fr-FR' },
+  CAD: { code: 'CAD', symbol: 'C$', locale: 'en-CA' },
+  AUD: { code: 'AUD', symbol: 'A$', locale: 'en-AU' }
 };
 
 class Database {
   constructor() {
     this.data = this.loadData();
+    this.pool = DATABASE_URL ? new Pool({ connectionString: DATABASE_URL }) : null;
+    if (this.pool) {
+      // Idle client errors would otherwise be an unhandled 'error' event and crash the process.
+      this.pool.on('error', (err) => console.error('PostgreSQL pool error:', err.message));
+    }
+    this.pendingWrite = Promise.resolve();
+    this.ensureUserCredentials();
+  }
+
+  async initialize() {
+    if (!this.pool) {
+      console.warn('DATABASE_URL is not configured; using local JSON storage.');
+      return;
+    }
+
+    await this.pool.query(`
+      CREATE TABLE IF NOT EXISTS nexride_state (
+        id SMALLINT PRIMARY KEY CHECK (id = 1),
+        data JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    const result = await this.pool.query('SELECT data FROM nexride_state WHERE id = 1');
+    if (result.rows.length === 0) {
+      await this.pool.query(
+        'INSERT INTO nexride_state (id, data) VALUES (1, $1::jsonb)',
+        [JSON.stringify(this.data)]
+      );
+      return;
+    }
+
+    this.data = result.rows[0].data;
+    this.ensureUserCredentials();
+  }
+
+  hashPassword(password) {
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+    return `${salt}:${hash}`;
+  }
+
+  verifyPassword(password, storedHash) {
+    if (typeof password !== 'string' || !storedHash || !storedHash.includes(':')) return false;
+    const [salt, key] = storedHash.split(':');
+    const derivedKey = crypto.scryptSync(password, salt, 64);
+    const storedKey = Buffer.from(key, 'hex');
+    return storedKey.length === derivedKey.length && crypto.timingSafeEqual(storedKey, derivedKey);
+  }
+
+  sanitizeUser(user) {
+    if (!user) return null;
+    const { passwordHash, ...safeUser } = user;
+    return safeUser;
+  }
+
+  ensureUserCredentials() {
+    let changed = false;
+    this.data.users.forEach((user) => {
+      if (user.role === 'RIDER' && !user.passwordHash) {
+        user.passwordHash = this.hashPassword('rider123');
+        changed = true;
+      }
+      if (user.role === 'DRIVER') {
+        if (!user.passwordHash) {
+          user.passwordHash = this.hashPassword('driver123');
+          changed = true;
+        }
+        if (!user.location || typeof user.location.lat !== 'number' || typeof user.location.lng !== 'number') {
+          user.location = {
+            lat: 40.758896 + (Math.random() - 0.5) * 0.02,
+            lng: -73.985130 + (Math.random() - 0.5) * 0.02,
+            heading: Math.floor(Math.random() * 360)
+          };
+          changed = true;
+        }
+        if (!user.vehicle) {
+          user.vehicle = {
+            id: `veh-${user.id}`,
+            make: 'Toyota',
+            model: 'Camry Hybrid',
+            year: 2023,
+            color: 'Midnight Black',
+            licensePlate: 'NYC-5520',
+            category: 'UberX'
+          };
+          changed = true;
+        }
+      }
+    });
+    if (changed) this.saveData();
+  }
+
+  authenticateUser(email, password, role) {
+    const user = this.data.users.find((candidate) =>
+      String(candidate.email || '').toLowerCase() === String(email).toLowerCase() &&
+      candidate.role === role &&
+      this.verifyPassword(password, candidate.passwordHash)
+    );
+    if (!user) return null;
+    return this.sanitizeUser(user);
+  }
+
+  changePassword(id, currentPassword, newPassword) {
+    const user = this.getUserById(id);
+    if (!user || !this.verifyPassword(currentPassword, user.passwordHash)) return null;
+    user.passwordHash = this.hashPassword(newPassword);
+    this.saveData();
+    return this.sanitizeUser(user);
+  }
+
+  upsertFirebaseUser(firebaseUser, role) {
+    let user = this.data.users.find(candidate =>
+      candidate.firebaseUid === firebaseUser.uid ||
+      String(candidate.email || '').toLowerCase() === firebaseUser.email.toLowerCase()
+    );
+
+    if (user && user.role !== role) return null;
+    if (!user) {
+      user = {
+        id: `firebase-${firebaseUser.uid}`,
+        firebaseUid: firebaseUser.uid,
+        name: firebaseUser.name || firebaseUser.email.split('@')[0],
+        email: firebaseUser.email,
+        role,
+        rating: 5,
+        walletBalance: 0,
+        avatar: firebaseUser.picture || null,
+        ...(role === 'DRIVER' ? {
+          status: 'OFFLINE',
+          totalTrips: 0,
+          acceptanceRate: 100,
+          location: {
+            lat: 40.758896 + (Math.random() - 0.5) * 0.02,
+            lng: -73.985130 + (Math.random() - 0.5) * 0.02,
+            heading: Math.floor(Math.random() * 360)
+          },
+          vehicle: {
+            id: `veh-${firebaseUser.uid.substring(0, 6)}`,
+            make: 'Toyota',
+            model: 'Camry Hybrid',
+            year: 2023,
+            color: 'Midnight Black',
+            licensePlate: 'NYC-5520',
+            category: 'UberX'
+          }
+        } : { totalRides: 0 })
+      };
+      this.data.users.push(user);
+    } else {
+      Object.assign(user, {
+        firebaseUid: firebaseUser.uid,
+        name: firebaseUser.name || user.name,
+        avatar: firebaseUser.picture || user.avatar
+      });
+      if (role === 'DRIVER' && (!user.location || typeof user.location.lat !== 'number' || typeof user.location.lng !== 'number')) {
+        user.location = {
+          lat: 40.758896 + (Math.random() - 0.5) * 0.02,
+          lng: -73.985130 + (Math.random() - 0.5) * 0.02,
+          heading: Math.floor(Math.random() * 360)
+        };
+      }
+      if (role === 'DRIVER' && !user.vehicle) {
+        user.vehicle = {
+          id: `veh-${user.id}`,
+          make: 'Toyota',
+          model: 'Camry Hybrid',
+          year: 2023,
+          color: 'Midnight Black',
+          licensePlate: 'NYC-5520',
+          category: 'UberX'
+        };
+      }
+    }
+
+    this.saveData();
+    return this.sanitizeUser(user);
   }
 
   loadData() {
@@ -219,7 +410,18 @@ class Database {
   saveData(data) {
     try {
       const tempPath = `${DB_FILE}.tmp`;
-      fs.writeFileSync(tempPath, JSON.stringify(data || this.data, null, 2), 'utf8');
+      const nextData = data || this.data;
+      if (this.pool) {
+        this.pendingWrite = this.pendingWrite
+          .then(() => this.pool.query(
+            'INSERT INTO nexride_state (id, data, updated_at) VALUES (1, $1::jsonb, NOW()) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()',
+            [JSON.stringify(nextData)]
+          ))
+          .catch((err) => console.error('Failed to write PostgreSQL state:', err.message));
+        return;
+      }
+
+      fs.writeFileSync(tempPath, JSON.stringify(nextData, null, 2), 'utf8');
       try {
         fs.renameSync(tempPath, DB_FILE);
       } catch (err) {
@@ -234,7 +436,7 @@ class Database {
 
   // Users & Drivers
   getUsers() {
-    return this.data.users;
+    return this.data.users.map(user => this.sanitizeUser(user));
   }
 
   getUserById(id) {
@@ -242,19 +444,29 @@ class Database {
   }
 
   getDrivers() {
-    return this.data.users.filter(u => u.role === 'DRIVER');
+    return this.data.users
+      .filter(u => u.role === 'DRIVER')
+      .map(user => this.sanitizeUser(user));
   }
 
   getDriverById(id) {
     return this.data.users.find(u => u.id === id && u.role === 'DRIVER');
   }
 
-  updateDriver(id, updates) {
+  // Pass { persist: false } for high-frequency updates (GPS ticks) that should not hit storage every time.
+  updateDriver(id, updates, { persist = true } = {}) {
     const driver = this.getDriverById(id);
     if (!driver) return null;
     Object.assign(driver, updates);
-    this.saveData();
+    if (persist) this.saveData();
     return driver;
+  }
+
+  isEmailTaken(email, exceptUserId) {
+    const normalized = String(email || '').toLowerCase();
+    return this.data.users.some((user) =>
+      user.id !== exceptUserId && String(user.email || '').toLowerCase() === normalized
+    );
   }
 
   updateUser(id, updates) {
@@ -323,10 +535,47 @@ class Database {
     return this.data.settings;
   }
 
-  updateSettings(updates) {
-    Object.assign(this.data.settings, updates);
+  updateSettings(updates = {}) {
+    const settings = this.data.settings;
+    const next = {};
+
+    if (updates.surgeMultiplier !== undefined) {
+      const surge = Number(updates.surgeMultiplier);
+      if (!Number.isFinite(surge) || surge < 1 || surge > 10) {
+        throw new Error('surgeMultiplier must be a number between 1 and 10');
+      }
+      next.surgeMultiplier = Number(surge.toFixed(2));
+    }
+
+    if (updates.platformCommissionPercent !== undefined) {
+      const commission = Number(updates.platformCommissionPercent);
+      if (!Number.isFinite(commission) || commission < 0 || commission > 100) {
+        throw new Error('platformCommissionPercent must be a number between 0 and 100');
+      }
+      next.platformCommissionPercent = commission;
+    }
+
+    if (updates.autoDispatchEnabled !== undefined) {
+      next.autoDispatchEnabled = Boolean(updates.autoDispatchEnabled);
+    }
+
+    if (updates.city !== undefined) {
+      const city = String(updates.city).trim().slice(0, 120);
+      if (city) next.city = city;
+    }
+
+    if (updates.currencyCode !== undefined) {
+      const code = String(updates.currencyCode).toUpperCase();
+      const currency = SUPPORTED_CURRENCIES[code];
+      if (!currency) throw new Error('Unsupported currencyCode');
+      next.currencyCode = currency.code;
+      next.currencySymbol = currency.symbol;
+      next.currencyLocale = currency.locale;
+    }
+
+    Object.assign(settings, next);
     this.saveData();
-    return this.data.settings;
+    return settings;
   }
 }
 

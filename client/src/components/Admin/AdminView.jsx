@@ -18,12 +18,15 @@ import {
 } from 'lucide-react';
 import { fetchAdminMetrics, updateAdminSettings, fetchUsers } from '../../services/api';
 import { socket } from '../../services/socket';
+import { formatCurrency } from '../../utils/currency';
 import MapControls from './MapControls';
 import DriverDrawer from './DriverDrawer';
 import RiderDrawer from './RiderDrawer';
 
 export default function AdminView({
   drivers = [],
+  settings,
+  onSettingsChange,
   isConnected = true,
   onCenterMap,
   entityFilter = 'BOTH',
@@ -43,6 +46,8 @@ export default function AdminView({
   const [loading, setLoading] = useState(true);
   const [surge, setSurge] = useState(1.0);
   const [commission, setCommission] = useState(20);
+  const [city, setCity] = useState('New York, NY');
+  const [currencyCode, setCurrencyCode] = useState('USD');
   const [saveStatus, setSaveStatus] = useState('');
   const [activeTab, setActiveTab] = useState('OPERATIONS'); // 'OPERATIONS' | 'METRICS'
 
@@ -77,6 +82,9 @@ export default function AdminView({
       if (metricsData?.settings) {
         setSurge(metricsData.settings.surgeMultiplier || 1.0);
         setCommission(metricsData.settings.platformCommissionPercent || 20);
+        setCity(metricsData.settings.city || 'New York, NY');
+        setCurrencyCode(metricsData.settings.currencyCode || 'USD');
+        if (onSettingsChange) onSettingsChange(metricsData.settings);
       }
     } catch (err) {
       console.error('Failed to fetch admin data:', err);
@@ -115,6 +123,8 @@ export default function AdminView({
     socket.on('settings:updated', (updated) => {
       if (updated.surgeMultiplier) setSurge(updated.surgeMultiplier);
       if (updated.platformCommissionPercent) setCommission(updated.platformCommissionPercent);
+      if (updated.city) setCity(updated.city);
+      if (updated.currencyCode) setCurrencyCode(updated.currencyCode);
     });
 
     return () => {
@@ -210,10 +220,13 @@ export default function AdminView({
   const handleSaveSettings = async () => {
     try {
       setSaveStatus('Saving...');
-      await updateAdminSettings({
+      const updatedSettings = await updateAdminSettings({
         surgeMultiplier: parseFloat(surge),
-        platformCommissionPercent: parseInt(commission, 10)
+        platformCommissionPercent: parseInt(commission, 10),
+        city: city.trim() || 'New York, NY',
+        currencyCode: currencyCode || 'USD'
       });
+      if (onSettingsChange && updatedSettings) onSettingsChange(updatedSettings);
       setSaveStatus('Saved!');
       setTimeout(() => setSaveStatus(''), 2000);
     } catch (err) {
@@ -476,7 +489,7 @@ export default function AdminView({
                 </div>
               </div>
               <p className="text-2xl font-extrabold text-white">
-                ${metrics?.totalRevenue !== undefined ? metrics.totalRevenue : '342.80'}
+                {formatCurrency(metrics?.totalRevenue ?? 0, settings?.city, {}, settings?.currencyCode)}
               </p>
               <span className="text-[11px] text-uber-green font-semibold flex items-center gap-1">
                 <TrendingUp className="w-3.5 h-3.5" /> +18.4% today
@@ -492,7 +505,7 @@ export default function AdminView({
                 </div>
               </div>
               <p className="text-2xl font-extrabold text-purple-300">
-                ${metrics?.platformRevenue !== undefined ? metrics.platformRevenue : '68.56'}
+                {formatCurrency(metrics?.platformRevenue ?? 0, settings?.city, {}, settings?.currencyCode)}
               </p>
               <span className="text-[11px] text-gray-400 font-semibold">
                 Net dispatch earnings
@@ -548,6 +561,30 @@ export default function AdminView({
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+              <div className="flex flex-col gap-3 bg-black/40 p-4 rounded-2xl border border-white/10">
+                <label className="flex flex-col gap-2 text-xs font-bold text-gray-300">
+                  <span>City / Location</span>
+                  <input
+                    value={city}
+                    onChange={(e) => setCity(e.target.value)}
+                    className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-white outline-none focus:border-uber-accent"
+                    placeholder="New York, NY"
+                  />
+                </label>
+                <label className="flex flex-col gap-2 text-xs font-bold text-gray-300">
+                  <span>Currency</span>
+                  <select
+                    value={currencyCode}
+                    onChange={(e) => setCurrencyCode(e.target.value)}
+                    className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-white outline-none focus:border-uber-accent"
+                  >
+                    {['USD', 'INR', 'GBP', 'EUR', 'CAD', 'AUD'].map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
               {/* Surge Multiplier Slider */}
               <div className="flex flex-col gap-2 bg-black/40 p-4 rounded-2xl border border-white/10">
                 <div className="flex items-center justify-between text-xs font-bold">
@@ -646,7 +683,7 @@ export default function AdminView({
                     </div>
 
                     <div className="text-right">
-                      <p className="text-sm font-extrabold text-white">${ride.fare}</p>
+                      <p className="text-sm font-extrabold text-white">{formatCurrency(ride.fare, settings?.city, {}, settings?.currencyCode)}</p>
                       <p className="text-[10px] text-gray-500 font-semibold">
                         {new Date(ride.createdAt).toLocaleTimeString([], {
                           hour: '2-digit',
