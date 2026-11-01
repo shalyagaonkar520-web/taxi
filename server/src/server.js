@@ -258,17 +258,23 @@ app.post('/api/rides/quotes', async (req, res) => {
 
     const settings = db.getSettings();
     const route = await getDrivingRoute(pickup, destination);
+    const location = settings.city || pickup?.address || destination?.address || '';
     const quotes = getFareQuotes({
       distanceKm: route.distanceKm,
       durationMin: route.durationMin,
-      surgeMultiplier: settings.surgeMultiplier
+      surgeMultiplier: settings.surgeMultiplier,
+      location,
+      currencyCode: settings.currencyCode || null
     });
 
     res.json({
       route,
       quotes,
       surgeMultiplier: settings.surgeMultiplier,
-      city: settings.city
+      city: settings.city,
+      currency: quotes[0]?.currency || settings.currencySymbol || '$',
+      currencyCode: quotes[0]?.currencyCode || settings.currencyCode || 'USD',
+      currencyLocale: quotes[0]?.currencyLocale || settings.currencyLocale || 'en-US'
     });
   } catch (err) {
     console.error('Error generating quotes:', err);

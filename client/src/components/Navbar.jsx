@@ -11,11 +11,13 @@ import {
   Zap,
   MapPin
 } from 'lucide-react';
+import { formatCurrency } from '../utils/currency';
 
 export default function Navbar({ 
   currentRole, 
   user, 
   walletBalance, 
+  settings,
   onOpenWallet,
   onOpenHistory,
   onOpenProfile,
@@ -45,8 +47,15 @@ export default function Navbar({
           </div>
         </div>
 
-        <div className="hidden sm:flex items-center px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 text-xs font-semibold text-gray-300">
-          {currentRole === 'RIDER' ? 'User workspace' : currentRole === 'DRIVER' ? 'Driver workspace' : 'Admin workspace'}
+        <div className="hidden sm:flex items-center gap-2">
+          <div className="flex items-center px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 text-xs font-semibold text-gray-300">
+            {currentRole === 'RIDER' ? 'User workspace' : currentRole === 'DRIVER' ? 'Driver workspace' : 'Admin workspace'}
+          </div>
+          {currentRole === 'RIDER' && (
+            <div className="flex items-center px-2.5 py-1 rounded-full border border-uber-accent/30 bg-uber-accent/10 text-[10px] font-bold uppercase tracking-[0.16em] text-uber-accent">
+              {settings?.currencyCode || 'USD'}
+            </div>
+          )}
         </div>
 
         {/* Right Section: Connection, Wallet & Profile */}
@@ -67,7 +76,7 @@ export default function Navbar({
               <div className="w-5 h-5 rounded-lg bg-uber-accent/20 flex items-center justify-center text-uber-accent group-hover:scale-110 transition-transform">
                 <Wallet className="w-3.5 h-3.5" />
               </div>
-              <span>${Number(walletBalance || 0).toFixed(2)}</span>
+              <span>{formatCurrency(Number(walletBalance || 0), settings?.city || 'New York, NY', {}, settings?.currencyCode || null)}</span>
               <Plus className="w-3.5 h-3.5 text-gray-400 group-hover:text-white" />
             </button>
           )}

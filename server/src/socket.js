@@ -43,7 +43,7 @@ function setupSocketIO(io) {
       if (role === 'DRIVER') {
         const pendingRide = db.getRides().find(ride => ride.status === 'REQUESTED' && !ride.driverId);
         const driver = db.getDriverById(userId);
-        if (pendingRide && driver?.status === 'ONLINE') {
+        if (pendingRide && driver?.status === 'ONLINE' && driver?.location?.lat && driver?.location?.lng) {
           const rider = db.getUserById(pendingRide.riderId);
           const toPickupRoute = await getDrivingRoute(driver.location, pendingRide.pickup);
           const settings = db.getSettings();
@@ -126,7 +126,7 @@ function setupSocketIO(io) {
       const rider = db.getUserById(riderId);
 
       // Find nearby online drivers (matching category if possible)
-      const drivers = db.getDrivers().filter(d => d.status === 'ONLINE');
+      const drivers = db.getDrivers().filter(d => d.status === 'ONLINE' && d.location && typeof d.location.lat === 'number' && typeof d.location.lng === 'number');
       let targetDriver = null;
 
       if (drivers.length > 0) {
@@ -457,7 +457,7 @@ async function simulateAutoDriverAcceptance(io, rideId) {
   const ride = db.getRideById(rideId);
   if (!ride || ride.status !== 'REQUESTED') return;
 
-  const drivers = db.getDrivers();
+  const drivers = db.getDrivers().filter(d => d.location && typeof d.location.lat === 'number' && typeof d.location.lng === 'number');
   const availableDriver = drivers.find(d => d.status === 'ONLINE') || drivers[0];
   if (!availableDriver) return;
 
@@ -563,7 +563,7 @@ function startDriverMovementSimulation(io, driverId, coordinates, phase, rideId)
  */
 function startIdleDriversCruising(io) {
   setInterval(() => {
-    const drivers = db.getDrivers().filter(d => d.status === 'ONLINE');
+    const drivers = db.getDrivers().filter(d => d.status === 'ONLINE' && d.location && typeof d.location.lat === 'number' && typeof d.location.lng === 'number');
     drivers.forEach(d => {
       // Small random drift simulating cruising (approx 20-30 meters)
       const dLat = (Math.random() - 0.5) * 0.0004;
@@ -576,12 +576,14 @@ function startIdleDriversCruising(io) {
         location: { lat: newLat, lng: newLng, heading }
       });
 
-      io.emit('driver:moved', {
-        driverId: d.id,
-        location: updated.location,
-        status: updated.status,
-        heading
-      });
+      if (updated && updated.location) {
+        io.emit('driver:moved', {
+          driverId: d.id,
+          location: updated.location,
+          status: updated.status,
+          heading
+        });
+      }
     });
   }, 4000);
 }

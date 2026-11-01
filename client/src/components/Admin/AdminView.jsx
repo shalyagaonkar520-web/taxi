@@ -17,11 +17,13 @@ import {
 import { fetchAdminMetrics, updateAdminSettings } from '../../services/api';
 import { socket } from '../../services/socket';
 
-export default function AdminView({ drivers }) {
+export default function AdminView({ drivers, settings, onSettingsChange }) {
   const [metrics, setMetrics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [surge, setSurge] = useState(1.0);
   const [commission, setCommission] = useState(20);
+  const [city, setCity] = useState('New York, NY');
+  const [currencyCode, setCurrencyCode] = useState('USD');
   const [saveStatus, setSaveStatus] = useState('');
 
   // Load metrics
@@ -33,6 +35,9 @@ export default function AdminView({ drivers }) {
       if (data?.settings) {
         setSurge(data.settings.surgeMultiplier || 1.0);
         setCommission(data.settings.platformCommissionPercent || 20);
+        setCity(data.settings.city || 'New York, NY');
+        setCurrencyCode(data.settings.currencyCode || 'USD');
+        if (onSettingsChange) onSettingsChange(data.settings);
       }
     } catch (err) {
       console.error('Failed to fetch admin metrics:', err);
@@ -58,10 +63,13 @@ export default function AdminView({ drivers }) {
   const handleSaveSettings = async () => {
     try {
       setSaveStatus('Saving...');
-      await updateAdminSettings({
+      const updatedSettings = await updateAdminSettings({
         surgeMultiplier: parseFloat(surge),
-        platformCommissionPercent: parseInt(commission, 10)
+        platformCommissionPercent: parseInt(commission, 10),
+        city: city.trim() || 'New York, NY',
+        currencyCode: currencyCode || 'USD'
       });
+      if (onSettingsChange) onSettingsChange(updatedSettings);
       setSaveStatus('Saved!');
       setTimeout(() => setSaveStatus(''), 2000);
     } catch (err) {
@@ -155,6 +163,33 @@ export default function AdminView({ drivers }) {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+          <div className="flex flex-col gap-3 bg-black/40 p-4 rounded-2xl border border-white/10">
+            <label className="flex flex-col gap-2 text-xs font-bold text-gray-300">
+              <span>City / Location</span>
+              <input
+                value={city}
+                onChange={(e) => setCity(e.target.value)}
+                className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-white outline-none focus:border-uber-accent"
+                placeholder="New York, NY"
+              />
+            </label>
+            <label className="flex flex-col gap-2 text-xs font-bold text-gray-300">
+              <span>Currency</span>
+              <select
+                value={currencyCode}
+                onChange={(e) => setCurrencyCode(e.target.value)}
+                className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-white outline-none focus:border-uber-accent"
+              >
+                <option value="USD">USD</option>
+                <option value="INR">INR</option>
+                <option value="GBP">GBP</option>
+                <option value="EUR">EUR</option>
+                <option value="CAD">CAD</option>
+                <option value="AUD">AUD</option>
+              </select>
+            </label>
+          </div>
+
           {/* Surge Multiplier Slider */}
           <div className="flex flex-col gap-2 bg-black/40 p-4 rounded-2xl border border-white/10">
             <div className="flex items-center justify-between text-xs font-bold">

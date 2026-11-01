@@ -197,6 +197,8 @@ const INITIAL_DATA = {
     platformCommissionPercent: 20,
     autoDispatchEnabled: true,
     currencySymbol: '$',
+    currencyCode: 'USD',
+    currencyLocale: 'en-US',
     city: 'New York, NY'
   }
 };
@@ -263,9 +265,31 @@ class Database {
         user.passwordHash = this.hashPassword('rider123');
         changed = true;
       }
-      if (user.role === 'DRIVER' && !user.passwordHash) {
-        user.passwordHash = this.hashPassword('driver123');
-        changed = true;
+      if (user.role === 'DRIVER') {
+        if (!user.passwordHash) {
+          user.passwordHash = this.hashPassword('driver123');
+          changed = true;
+        }
+        if (!user.location || typeof user.location.lat !== 'number' || typeof user.location.lng !== 'number') {
+          user.location = {
+            lat: 40.758896 + (Math.random() - 0.5) * 0.02,
+            lng: -73.985130 + (Math.random() - 0.5) * 0.02,
+            heading: Math.floor(Math.random() * 360)
+          };
+          changed = true;
+        }
+        if (!user.vehicle) {
+          user.vehicle = {
+            id: `veh-${user.id}`,
+            make: 'Toyota',
+            model: 'Camry Hybrid',
+            year: 2023,
+            color: 'Midnight Black',
+            licensePlate: 'NYC-5520',
+            category: 'UberX'
+          };
+          changed = true;
+        }
       }
     });
     if (changed) this.saveData();
@@ -306,7 +330,25 @@ class Database {
         rating: 5,
         walletBalance: 0,
         avatar: firebaseUser.picture || null,
-        ...(role === 'DRIVER' ? { status: 'OFFLINE', totalTrips: 0, acceptanceRate: 100 } : { totalRides: 0 })
+        ...(role === 'DRIVER' ? {
+          status: 'OFFLINE',
+          totalTrips: 0,
+          acceptanceRate: 100,
+          location: {
+            lat: 40.758896 + (Math.random() - 0.5) * 0.02,
+            lng: -73.985130 + (Math.random() - 0.5) * 0.02,
+            heading: Math.floor(Math.random() * 360)
+          },
+          vehicle: {
+            id: `veh-${firebaseUser.uid.substring(0, 6)}`,
+            make: 'Toyota',
+            model: 'Camry Hybrid',
+            year: 2023,
+            color: 'Midnight Black',
+            licensePlate: 'NYC-5520',
+            category: 'UberX'
+          }
+        } : { totalRides: 0 })
       };
       this.data.users.push(user);
     } else {
@@ -315,6 +357,24 @@ class Database {
         name: firebaseUser.name || user.name,
         avatar: firebaseUser.picture || user.avatar
       });
+      if (role === 'DRIVER' && (!user.location || typeof user.location.lat !== 'number' || typeof user.location.lng !== 'number')) {
+        user.location = {
+          lat: 40.758896 + (Math.random() - 0.5) * 0.02,
+          lng: -73.985130 + (Math.random() - 0.5) * 0.02,
+          heading: Math.floor(Math.random() * 360)
+        };
+      }
+      if (role === 'DRIVER' && !user.vehicle) {
+        user.vehicle = {
+          id: `veh-${user.id}`,
+          make: 'Toyota',
+          model: 'Camry Hybrid',
+          year: 2023,
+          color: 'Midnight Black',
+          licensePlate: 'NYC-5520',
+          category: 'UberX'
+        };
+      }
     }
 
     this.saveData();

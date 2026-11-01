@@ -1,13 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { Wallet, Plus, CreditCard, ArrowDownLeft, ArrowUpRight, X, CheckCircle, Shield } from 'lucide-react';
 import { fetchWallet, topupWallet } from '../services/api';
+import { formatCurrency } from '../utils/currency';
 
-export default function WalletModal({ user, onClose, onBalanceUpdate }) {
+export default function WalletModal({ user, settings, onClose, onBalanceUpdate }) {
   const [balance, setBalance] = useState(user?.walletBalance || 0);
   const [transactions, setTransactions] = useState([]);
   const [topupAmount, setTopupAmount] = useState(50);
   const [loading, setLoading] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
+  const cityLocation = settings?.city || 'New York, NY';
+  const currencyCode = settings?.currencyCode || null;
 
   useEffect(() => {
     if (user?.id) {
@@ -32,7 +35,7 @@ export default function WalletModal({ user, onClose, onBalanceUpdate }) {
       setBalance(res.balance);
       if (onBalanceUpdate) onBalanceUpdate(res.balance);
       setTransactions((prev) => [res.transaction, ...prev]);
-      setSuccessMsg(`Successfully added $${topupAmount}!`);
+      setSuccessMsg(`Successfully added ${formatCurrency(topupAmount, cityLocation, {}, currencyCode)}!`);
       setTimeout(() => setSuccessMsg(''), 3000);
     } catch (err) {
       console.error('Failed to topup:', err);
@@ -61,7 +64,7 @@ export default function WalletModal({ user, onClose, onBalanceUpdate }) {
         {/* Balance Card */}
         <div className="bg-gradient-to-br from-uber-accent/25 via-blue-900/20 to-black p-5 rounded-2xl border border-uber-accent/30 flex flex-col gap-1 shadow-lg">
           <span className="text-xs font-bold text-gray-300 uppercase tracking-wider">Available Balance</span>
-          <p className="text-3xl font-extrabold text-white">${Number(balance).toFixed(2)}</p>
+          <p className="text-3xl font-extrabold text-white">{formatCurrency(Number(balance), cityLocation, {}, currencyCode)}</p>
           <div className="flex items-center gap-1 text-[11px] text-blue-300 font-semibold mt-1">
             <Shield className="w-3.5 h-3.5 text-uber-green" /> 100% Encrypted In-App Payments
           </div>
@@ -81,7 +84,7 @@ export default function WalletModal({ user, onClose, onBalanceUpdate }) {
                     : 'bg-black/40 text-gray-300 border-white/10 hover:bg-white/5'
                 }`}
               >
-                +${amt}
+                +{formatCurrency(amt, cityLocation, {}, currencyCode)}
               </button>
             ))}
           </div>
@@ -92,7 +95,7 @@ export default function WalletModal({ user, onClose, onBalanceUpdate }) {
             className="mt-2 w-full py-3 rounded-xl bg-uber-accent hover:bg-uber-accentHover font-extrabold text-white text-xs shadow-lg shadow-uber-accent/25 transition-all flex items-center justify-center gap-2"
           >
             <Plus className="w-4 h-4" />
-            <span>{loading ? 'Processing...' : `Add $${topupAmount} to Wallet`}</span>
+            <span>{loading ? 'Processing...' : `Add ${formatCurrency(topupAmount, cityLocation, {}, currencyCode)} to Wallet`}</span>
           </button>
 
           {successMsg && (
@@ -137,7 +140,7 @@ export default function WalletModal({ user, onClose, onBalanceUpdate }) {
                     </div>
 
                     <span className={`font-extrabold ${isDeposit ? 'text-uber-green' : 'text-white'}`}>
-                      {isDeposit ? `+$${tx.amount.toFixed(2)}` : `-$${Math.abs(tx.amount).toFixed(2)}`}
+                      {isDeposit ? `+${formatCurrency(tx.amount, cityLocation, {}, currencyCode)}` : `-${formatCurrency(Math.abs(tx.amount), cityLocation, {}, currencyCode)}`}
                     </span>
                   </div>
                 );

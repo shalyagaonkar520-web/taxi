@@ -56,6 +56,7 @@ function RoleApp({ role }) {
   const [previewPickup, setPreviewPickup] = useState(null);
   const [previewDestination, setPreviewDestination] = useState(null);
   const [mapCenter, setMapCenter] = useState([12.9716, 77.5946]);
+  const [settings, setSettings] = useState({ city: 'New York, NY', currencyCode: 'USD' });
   const [isConnected, setIsConnected] = useState(socket.connected);
 
   // Modals
@@ -101,6 +102,11 @@ function RoleApp({ role }) {
     socket.on('init:state', (data) => {
       if (data.drivers) setDrivers(data.drivers);
       if (data.activeRide) setActiveRide(data.activeRide);
+      if (data.settings) setSettings(data.settings);
+    });
+
+    socket.on('settings:updated', (updated) => {
+      if (updated) setSettings(updated);
     });
 
     // Driver location movements
@@ -125,6 +131,7 @@ function RoleApp({ role }) {
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
       socket.off('init:state');
+      socket.off('settings:updated');
       socket.off('driver:moved');
       socket.off('driver:status_changed');
     };
@@ -174,6 +181,7 @@ function RoleApp({ role }) {
         currentRole={role}
         user={currentUser}
         walletBalance={currentUser?.walletBalance}
+        settings={settings}
         onOpenWallet={() => setShowWalletModal(true)}
         onOpenHistory={() => setShowHistoryModal(true)}
         onOpenProfile={() => setShowProfileModal(true)}
@@ -190,6 +198,8 @@ function RoleApp({ role }) {
               user={currentUser}
               drivers={drivers}
               activeRide={activeRide}
+              settings={settings}
+              onSettingsChange={setSettings}
               onRideUpdate={handleRiderUpdate}
               onOpenWallet={() => setShowWalletModal(true)}
               onOpenHistory={() => setShowHistoryModal(true)}
@@ -211,7 +221,11 @@ function RoleApp({ role }) {
 
           {role === 'ADMIN' && (
             <div className="w-full">
-              <AdminView drivers={drivers} />
+              <AdminView
+                drivers={drivers}
+                settings={settings}
+                onSettingsChange={setSettings}
+              />
             </div>
           )}
         </div>
@@ -237,6 +251,7 @@ function RoleApp({ role }) {
       {showWalletModal && (
         <WalletModal
           user={currentUser}
+          settings={settings}
           onClose={() => setShowWalletModal(false)}
           onBalanceUpdate={(newBalance) => {
             setCurrentUser((prev) => ({ ...prev, walletBalance: newBalance }));
@@ -248,6 +263,7 @@ function RoleApp({ role }) {
       {showHistoryModal && (
         <HistoryModal
           user={currentUser}
+          settings={settings}
           onClose={() => setShowHistoryModal(false)}
         />
       )}

@@ -27,11 +27,14 @@ import confetti from 'canvas-confetti';
 import { searchPlaces, getFareQuotes, topupWallet, reverseGeocodePlace, relocateDrivers, fetchNearbyPlaces } from '../../services/api';
 import { socket } from '../../services/socket';
 import { sound } from '../../utils/audio';
+import { formatCurrency, getCurrencyForLocation } from '../../utils/currency';
 
 export default function RiderView({
   user,
   drivers,
   activeRide,
+  settings,
+  onSettingsChange,
   onRideUpdate,
   onOpenWallet,
   onOpenHistory
@@ -80,6 +83,14 @@ export default function RiderView({
             const place = await reverseGeocodePlace(latitude, longitude);
             setPickup(place);
             setPickupQuery(place.name || place.address);
+            const detectedCurrency = getCurrencyForLocation(place.address || place.name || 'New York, NY');
+            if (onSettingsChange) {
+              onSettingsChange((prev) => ({
+                ...prev,
+                city: place.address || place.name || prev.city || 'New York, NY',
+                currencyCode: detectedCurrency.code
+              }));
+            }
             await relocateDrivers(latitude, longitude);
             if (onRideUpdate) {
               onRideUpdate({
@@ -111,6 +122,14 @@ export default function RiderView({
           const place = await reverseGeocodePlace(latitude, longitude);
           setPickup(place);
           setPickupQuery(place.name || place.address);
+          const detectedCurrency = getCurrencyForLocation(place.address || place.name || 'New York, NY');
+          if (onSettingsChange) {
+            onSettingsChange((prev) => ({
+              ...prev,
+              city: place.address || place.name || prev.city || 'New York, NY',
+              currencyCode: detectedCurrency.code
+            }));
+          }
           
           // Clear any previous destination to prevent mismatched cross-city routes
           setDestination(null);
@@ -344,6 +363,8 @@ export default function RiderView({
   };
 
   const selectedQuote = quotes.find((q) => q.id === selectedTier) || quotes[0];
+  const cityLocation = destination?.address || pickup?.address || settings?.city || 'New York, NY';
+  const currencyInfo = getCurrencyForLocation(cityLocation, settings?.currencyCode || null);
   const finalFare = selectedQuote
     ? (selectedQuote.totalFare * (1 - discountPercent / 100)).toFixed(2)
     : '0.00';
@@ -595,7 +616,7 @@ export default function RiderView({
 
                       <div className="text-right">
                         <p className="text-base font-extrabold text-white">
-                          ${tier.totalFare}
+                          {formatCurrency(tier.totalFare, cityLocation, {}, settings?.currencyCode || null)}
                         </p>
                         {tier.surgeMultiplier > 1 && (
                           <span className="text-[10px] font-bold text-uber-gold flex items-center justify-end gap-0.5">
@@ -615,7 +636,7 @@ export default function RiderView({
                   className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-black/40 border border-white/10 hover:bg-white/5 text-gray-300 font-semibold"
                 >
                   <Wallet className="w-3.5 h-3.5 text-uber-accent" />
-                  <span>Wallet (${Number(user?.walletBalance || 0).toFixed(2)})</span>
+                  <span>Wallet ({formatCurrency(Number(user?.walletBalance || 0), cityLocation, {}, settings?.currencyCode || null)})</span>
                 </button>
 
                 <button
@@ -638,7 +659,7 @@ export default function RiderView({
                 className="w-full py-4 rounded-2xl bg-gradient-to-r from-uber-accent to-blue-500 hover:from-uber-accentHover hover:to-blue-600 font-extrabold text-white text-base shadow-xl shadow-uber-accent/30 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
               >
                 <span>Request {selectedQuote?.name || 'Ride'}</span>
-                <span className="text-sm font-normal text-blue-200">(${finalFare})</span>
+                <span className="text-sm font-normal text-blue-200">({formatCurrency(finalFare, cityLocation, {}, settings?.currencyCode || null)})</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
             </div>
@@ -692,7 +713,7 @@ export default function RiderView({
 
           <div className="w-full bg-black/40 p-3 rounded-2xl border border-white/10 flex items-center justify-between text-xs">
             <span className="text-gray-400">Estimated Fare</span>
-            <span className="text-white font-extrabold">${activeRide.fare}</span>
+            <span className="text-white font-extrabold">{formatCurrency(activeRide.fare, activeRide.pickup?.address || activeRide.destination?.address || settings?.city || 'New York, NY', {}, settings?.currencyCode || null)}</span>
           </div>
 
           <button
