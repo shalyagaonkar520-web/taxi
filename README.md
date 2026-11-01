@@ -39,7 +39,7 @@ A full-stack, real-time ride-hailing application built with **React 18**, **Node
 |---|---|
 | **Frontend** | React 18, Vite, Tailwind CSS, Lucide Icons, Leaflet, Canvas Confetti |
 | **Backend** | Node.js, Express.js, Socket.IO, CORS, Dotenv, UUID |
-| **Database** | Persistent JSON / SQLite Storage with atomic ACID file writes |
+| **Database** | PostgreSQL 16 with JSONB state persistence |
 | **Routing & Geocoding** | Open Source Routing Machine (OSRM) + Nominatim Open APIs (zero paid API keys required) |
 | **Audio** | Native Web Audio API Synthesizer (zero external audio asset dependencies) |
 
@@ -71,11 +71,59 @@ npm run dev
 ```
 
 - **Role workspaces**:
-  - Rider: [http://localhost:5173/rider](http://localhost:5173/rider)
+  - User: [http://localhost:5173/user](http://localhost:5173/user)
   - Driver: [http://localhost:5173/driver](http://localhost:5173/driver)
   - Admin: [http://localhost:5173/admin](http://localhost:5173/admin)
 - **Workspace launcher**: [http://localhost:5173](http://localhost:5173)
 - **Backend API & WebSocket Server**: [http://localhost:5000](http://localhost:5000)
+
+### Production Configuration
+
+The frontend uses same-origin `/api` and Socket.IO paths by default, which works
+when a reverse proxy serves the client and forwards those paths to the server.
+For separate deployments, copy the example files and set:
+
+```bash
+cp client/.env.example client/.env.production
+cp server/.env.example server/.env
+```
+
+- `VITE_API_URL`: backend URL including `/api`, for example
+  `https://api.example.com/api`.
+- `VITE_SOCKET_URL`: backend origin, for example `https://api.example.com`.
+- `CORS_ORIGIN`: comma-separated frontend origins, for example
+  `https://app.example.com`.
+- `DATABASE_URL`: PostgreSQL connection string. The local Docker example uses
+  `postgresql://postgres:password123@localhost:5434/nexride_dev`.
+
+Before publishing, confirm the backend responds at `/api/health`, the frontend
+can reach the configured API URL, and the Socket.IO connection is established.
+Do not commit `.env` files or production secrets.
+
+### Database Migration
+
+The server creates the `nexride_state` table on startup. On an empty database,
+it imports the existing `server/data/db.json` seed state; subsequent writes are
+persisted to PostgreSQL. The JSON file remains as a local recovery fallback when
+`DATABASE_URL` is not configured.
+
+### Firebase Authentication
+
+Firebase Authentication is optional for local development and becomes available
+when the Firebase web settings are added to `client/.env` and the Firebase Admin
+service-account JSON is added only to `server/.env`.
+
+In Firebase Console:
+
+1. Enable **Email/Password** and **Google** sign-in providers.
+2. Add the authorized local and production domains.
+3. Create the one admin account using the email in `ADMIN_EMAIL`.
+4. Download a service account from **Project settings → Service accounts** and
+  set its JSON as `FIREBASE_SERVICE_ACCOUNT_JSON` on the server.
+
+Riders and drivers can then create accounts, sign in with Google, and request
+password-reset emails. Admin accounts cannot be self-created; the server only
+accepts the configured admin email for the admin workspace.
 
 ---
 

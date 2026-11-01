@@ -1,4 +1,48 @@
 // Vehicle Tier Configurations & Pricing Matrix
+const CURRENCY_BY_LOCATION = {
+  default: { code: 'USD', symbol: '$', locale: 'en-US' },
+  india: { code: 'INR', symbol: '₹', locale: 'en-IN' },
+  uk: { code: 'GBP', symbol: '£', locale: 'en-GB' },
+  europe: { code: 'EUR', symbol: '€', locale: 'fr-FR' },
+  canada: { code: 'CAD', symbol: 'C$', locale: 'en-CA' },
+  australia: { code: 'AUD', symbol: 'A$', locale: 'en-AU' }
+};
+
+const CURRENCY_BY_CODE = Object.fromEntries(
+  Object.values(CURRENCY_BY_LOCATION).map((currency) => [currency.code, currency])
+);
+
+function getCurrencyForLocation(location = '', overrideCode = null) {
+  const normalized = String(location || '').toLowerCase();
+  const code = String(overrideCode || '').toUpperCase();
+
+  if (code && CURRENCY_BY_CODE[code]) {
+    return CURRENCY_BY_CODE[code];
+  }
+
+  if (/(india|bengaluru|bangalore|mumbai|delhi|hyderabad|chennai|kolkata|pune)/.test(normalized)) {
+    return CURRENCY_BY_LOCATION.india;
+  }
+
+  if (/(united kingdom|uk|england|london|manchester|birmingham|glasgow|scotland|wales)/.test(normalized)) {
+    return CURRENCY_BY_LOCATION.uk;
+  }
+
+  if (/(france|paris|germany|berlin|munich|italy|rome|spain|madrid|europe|eu)/.test(normalized)) {
+    return CURRENCY_BY_LOCATION.europe;
+  }
+
+  if (/(canada|toronto|vancouver|montreal|calgary|ottawa)/.test(normalized)) {
+    return CURRENCY_BY_LOCATION.canada;
+  }
+
+  if (/(australia|sydney|melbourne|perth|brisbane)/.test(normalized)) {
+    return CURRENCY_BY_LOCATION.australia;
+  }
+
+  return CURRENCY_BY_LOCATION.default;
+}
+
 const VEHICLE_TIERS = {
   UberGo: {
     id: 'UberGo',
@@ -98,16 +142,19 @@ const BOOKING_FEE = 1.50;
 /**
  * Calculate fare for a given distance and duration
  */
-function calculateFare({ category = 'UberX', distanceKm = 1, durationMin = 5, surgeMultiplier = 1.0 }) {
+function calculateFare({ category = 'UberX', distanceKm = 1, durationMin = 5, surgeMultiplier = 1.0, currencyInfo = getCurrencyForLocation() }) {
   const tier = VEHICLE_TIERS[category] || VEHICLE_TIERS.UberX;
-  
-  const rawFare = tier.baseFare + 
-    (distanceKm * tier.perKmRate) + 
+  distanceKm = Number.isFinite(Number(distanceKm)) ? Number(distanceKm) : 1;
+  durationMin = Number.isFinite(Number(durationMin)) ? Number(durationMin) : 5;
+  surgeMultiplier = Number(surgeMultiplier) > 0 ? Number(surgeMultiplier) : 1.0;
+
+  const rawFare = tier.baseFare +
+    (distanceKm * tier.perKmRate) +
     (durationMin * tier.perMinRate);
-  
-  const subtotal = rawFare * (surgeMultiplier || 1.0);
+
+  const subtotal = rawFare * surgeMultiplier;
   const total = Math.max(tier.minFare, subtotal + BOOKING_FEE);
-  
+
   return {
     category,
     tierName: tier.name,
@@ -119,14 +166,18 @@ function calculateFare({ category = 'UberX', distanceKm = 1, durationMin = 5, su
     bookingFee: BOOKING_FEE,
     surgeMultiplier: Number(surgeMultiplier.toFixed(1)),
     totalFare: Number(total.toFixed(2)),
-    currency: '$'
+    currency: currencyInfo.symbol,
+    currencyCode: currencyInfo.code,
+    currencyLocale: currencyInfo.locale
   };
 }
 
 /**
  * Get fare quotes across all vehicle tiers for given distance/duration
  */
-function getFareQuotes({ distanceKm, durationMin, surgeMultiplier = 1.0 }) {
+function getFareQuotes({ distanceKm, durationMin, surgeMultiplier = 1.0, location = '', currencyCode = null }) {
+  const currencyInfo = getCurrencyForLocation(location, currencyCode);
+
   return Object.keys(VEHICLE_TIERS).map(categoryKey => {
     const tier = VEHICLE_TIERS[categoryKey];
     const adjustedDuration = Math.ceil(durationMin / (tier.speedMultiplier || 1.0));
@@ -134,7 +185,8 @@ function getFareQuotes({ distanceKm, durationMin, surgeMultiplier = 1.0 }) {
       category: categoryKey,
       distanceKm,
       durationMin: adjustedDuration,
-      surgeMultiplier
+      surgeMultiplier,
+      currencyInfo
     });
 
     return {
@@ -149,5 +201,6 @@ module.exports = {
   VEHICLE_TIERS,
   BOOKING_FEE,
   calculateFare,
-  getFareQuotes
+  getFareQuotes,
+  getCurrencyForLocation
 };

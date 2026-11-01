@@ -47,8 +47,6 @@ const createVehicleIcon = (
   });
 };
 
-// Green = where you get in, red = where you get out. Same colours as the
-// dots in the rider sheet, so the map and the text always agree.
 // Custom SVG Rider Marker with Lifecycle Status Differentiation
 const createRiderIcon = (status = 'REQUESTED', isSelected = false) => {
   let mainColor = '#A855F7'; // Purple default
@@ -132,9 +130,6 @@ export default function LiveMap({
   driverRouteCoordinates = [],
   assignedDriverId = null,
   onMapClick = null,
-  isPickerMode = false,
-  pickerType = 'pickup',
-  onPickerCenterChange = null
   // Optional Live Operations features (with backward-compatible defaults)
   entityFilter = 'BOTH', // 'CABS' | 'RIDERS' | 'BOTH'
   onDriverClick = null,
@@ -180,51 +175,28 @@ export default function LiveMap({
 
     mapInstanceRef.current = map;
 
-    // Trigger size recalculation after render
-    setTimeout(() => {
-      map.invalidateSize();
-    }, 250);
+    // Recalculate size after first render so tiles fill the container
+    const sizeTimer = setTimeout(() => map.invalidateSize(), 250);
 
     return () => {
+      clearTimeout(sizeTimer);
       map.remove();
       mapInstanceRef.current = null;
     };
   }, []);
 
-  // Listen to map moveend for Picker Mode
+  // Pan to center when center prop changes
   useEffect(() => {
     const map = mapInstanceRef.current;
-    if (!map) return;
-
-    const handleMoveEnd = () => {
-      if (isPickerMode && onPickerCenterChange) {
-        const c = map.getCenter();
-        onPickerCenterChange({ lat: c.lat, lng: c.lng });
-      }
-    };
-
-    map.on('moveend', handleMoveEnd);
-    return () => {
-      map.off('moveend', handleMoveEnd);
-    };
-  }, [isPickerMode, onPickerCenterChange]);
-
-  // Pan to center when center prop changes.
-  // In picker mode the centre is driven BY the user dragging, so flying
-  // back to it would fight the drag.
-  useEffect(() => {
-    const map = mapInstanceRef.current;
-    if (isPickerMode) return;
     if (map && center && center.length === 2 && !routeCoordinates?.length) {
-      map.flyTo(center, zoom || 15, { duration: 1.0 });
       map.flyTo(center, zoom || 14, { duration: 1.2 });
     }
-  }, [center, isPickerMode]);
+  }, [center]);
 
   // Update Drivers on Map
   useEffect(() => {
     const map = mapInstanceRef.current;
-    if (!map || isPickerMode) return;
+    if (!map) return;
 
     const shouldShowCabs = entityFilter !== 'RIDERS' && activeLayers?.cabs !== false;
 
@@ -264,13 +236,9 @@ export default function LiveMap({
         marker.setLatLng([driver.location.lat, driver.location.lng]);
         marker.setIcon(icon);
       } else {
-        // Inline colours so the tooltip stays readable in light and dark mode
         const marker = L.marker([driver.location.lat, driver.location.lng], { icon })
           .addTo(map)
           .bindTooltip(`
-            <div style="padding: 2px 4px; font-size: 12px; line-height: 1.35;">
-              <div style="font-weight: 700; color: #ffffff;">${driver.name || 'Driver'}</div>
-              <div style="color: #d4d4d8;">${driver.vehicle?.make || ''} ${driver.vehicle?.model || ''}</div>
             <div class="p-1 text-xs font-semibold">
               <div class="flex items-center gap-1.5">
                 <span class="w-1.5 h-1.5 rounded-full ${
@@ -280,11 +248,7 @@ export default function LiveMap({
               </div>
               <div class="text-gray-300 font-normal mt-0.5">${driver.vehicle?.make || 'Vehicle'} ${driver.vehicle?.model || ''} • ${driver.status || 'ONLINE'}</div>
             </div>
-          `, {
-            className: 'nexride-map-tooltip',
-            direction: 'top',
-            offset: [0, -18]
-          });
+          `, { className: 'glass-dropdown rounded-lg shadow-xl' });
 
         if (onDriverClick) {
           marker.on('click', () => {
@@ -295,7 +259,6 @@ export default function LiveMap({
         driverMarkersRef.current.set(driver.id, marker);
       }
     });
-  }, [drivers, assignedDriverId, isPickerMode]);
   }, [drivers, assignedDriverId, entityFilter, activeLayers?.cabs, selectedDriverId, onDriverClick]);
 
   // Update Riders on Map (if rider coordinates exist in state)
@@ -408,7 +371,7 @@ export default function LiveMap({
   // Update Pickup & Destination Markers
   useEffect(() => {
     const map = mapInstanceRef.current;
-    if (!map || isPickerMode) return;
+    if (!map) return;
 
     // Pickup
     if (pickup && pickup.lat) {
@@ -437,12 +400,12 @@ export default function LiveMap({
       destinationMarkerRef.current.remove();
       destinationMarkerRef.current = null;
     }
-  }, [pickup, destination, isPickerMode]);
+  }, [pickup, destination]);
 
   // Update Primary Trip Route Polyline
   useEffect(() => {
     const map = mapInstanceRef.current;
-    if (!map || isPickerMode) return;
+    if (!map) return;
 
     const showTrips = activeLayers?.trips !== false;
 
@@ -467,13 +430,12 @@ export default function LiveMap({
       routePolylineRef.current.remove();
       routePolylineRef.current = null;
     }
-  }, [routeCoordinates, isPickerMode]);
   }, [routeCoordinates, activeLayers?.trips]);
 
   // Update Driver-to-Pickup Polyline
   useEffect(() => {
     const map = mapInstanceRef.current;
-    if (!map || isPickerMode) return;
+    if (!map) return;
 
     const showTrips = activeLayers?.trips !== false;
 
@@ -493,35 +455,11 @@ export default function LiveMap({
       driverRoutePolylineRef.current.remove();
       driverRoutePolylineRef.current = null;
     }
-  }, [driverRouteCoordinates, isPickerMode]);
   }, [driverRouteCoordinates, activeLayers?.trips]);
 
   return (
-    <div className="relative w-full h-full min-h-[350px]">
+    <div className="relative w-full h-full min-h-[400px]">
       <div ref={mapRef} className="w-full h-full" />
-
-      {/* Floating Rapido/Uber Center Pin in Picker Mode */}
-      {isPickerMode && (
-        <div className="absolute inset-0 pointer-events-none z-20 flex items-center justify-center">
-          <div className="relative flex flex-col items-center -translate-y-1/2">
-            {/* Tag badge above pin */}
-            <div className={`mb-2 px-3 py-1.5 rounded-full text-white text-xs font-black shadow-xl flex items-center gap-1.5 ${pickerType === 'pickup' ? 'bg-uber-green' : 'bg-uber-red'}`}>
-              <span>{pickerType === 'pickup' ? 'Pick me up here' : 'Drop me here'}</span>
-            </div>
-
-            {/* Floating centre pin */}
-            <div className="relative flex flex-col items-center">
-              <div className={`w-9 h-9 rounded-full ${pickerType === 'pickup' ? 'bg-uber-green ring-uber-green/25' : 'bg-uber-red ring-uber-red/25'} ring-8 flex items-center justify-center text-white shadow-xl border-2 border-white`}>
-                <span className="w-2.5 h-2.5 rounded-full bg-white" />
-              </div>
-              <div className={`w-1 h-5 ${pickerType === 'pickup' ? 'bg-uber-green' : 'bg-uber-red'} shadow-md`} />
-            </div>
-
-            {/* Ground shadow dot */}
-            <div className="w-4 h-2 bg-black/60 rounded-full blur-[1px] mt-0.5" />
-          </div>
-        </div>
-      )}
     </div>
   );
 }
