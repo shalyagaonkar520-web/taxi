@@ -21,7 +21,7 @@
       (function () {
         try {
           var path = window.location.pathname.toLowerCase();
-          var isRider = path === '/rider';
+          var isRider = path === '/rider' || path === '/user';
           var saved = localStorage.getItem('nexride-theme');
           var dark = isRider ? saved === 'dark' : true;
           if (dark) document.documentElement.classList.add('dark');

@@ -12,6 +12,7 @@ const db = require('./db');
 const { getFareQuotes, calculateFare, VEHICLE_TIERS } = require('./services/pricing');
 const { getDrivingRoute, searchPlaces, reverseGeocode, calculateHaversineDistance } = require('./services/routing');
 const { setupSocketIO } = require('./socket');
+const ivrService = require('./services/ivrService');
 
 const app = express();
 const server = http.createServer(app);
@@ -141,7 +142,7 @@ app.get('/api/users/:id', (req, res) => {
 });
 
 app.patch('/api/users/:id', (req, res) => {
-  const { name, email, phone, avatar } = req.body || {};
+  const { name, email, phone, avatar, ivrEnabled } = req.body || {};
   if (typeof email === 'string' && email.trim() && db.isEmailTaken(email.trim(), req.params.id)) {
     return res.status(409).json({ error: 'That email is already in use' });
   }
@@ -149,7 +150,8 @@ app.patch('/api/users/:id', (req, res) => {
     ...(typeof name === 'string' && name.trim() ? { name: name.trim() } : {}),
     ...(typeof email === 'string' && email.trim() ? { email: email.trim().toLowerCase() } : {}),
     ...(typeof phone === 'string' ? { phone: phone.trim() } : {}),
-    ...(typeof avatar === 'string' ? { avatar: avatar.trim() } : {})
+    ...(typeof avatar === 'string' ? { avatar: avatar.trim() } : {}),
+    ...(typeof ivrEnabled === 'boolean' ? { ivrEnabled } : {})
   });
   if (!user) return res.status(404).json({ error: 'User not found' });
   res.json({ user: db.sanitizeUser(user) });
@@ -388,8 +390,93 @@ process.on('unhandledRejection', (reason) => {
   console.error('Unhandled promise rejection:', reason);
 });
 
+// ---------------- DRIVER DASHBOARD API ----------------
+
+// Wraps a driver route: resolves the driver (404 if unknown) and turns thrown errors into JSON.
+function driverRoute(handler, errorStatus = 500) {
+  return (req, res) => {
+    try {
+      const driver = db.resolveDriver(req.params.id);
+      if (!driver) return res.status(404).json({ error: 'Driver not found' });
+      return res.json(handler(driver, req));
+    } catch (err) {
+      return res.status(errorStatus).json({ error: err.message });
+    }
+  };
+}
+
+// Demand surge zones shown on the driver map
+app.get('/api/driver/heatmap', (req, res) => {
+  res.json(db.getDriverHeatmap());
+});
+
+app.get('/api/driver/:id/summary', driverRoute((driver) => db.getDriverSummary(driver.id)));
+
+app.get('/api/driver/:id/earnings', driverRoute((driver, req) =>
+  db.getDriverEarnings(driver.id, req.query.range === 'day' ? 'day' : 'week')
+));
+
+app.post('/api/driver/:id/cashout', driverRoute((driver, req) =>
+  db.recordCashout(driver.id, req.body?.amount, String(req.body?.method || 'INSTANT_BANK').slice(0, 40)),
+  400
+));
+
+app.get('/api/driver/:id/quests', driverRoute((driver) => db.getDriverQuests(driver.id)));
+
+app.post('/api/driver/:id/quests', driverRoute((driver, req) =>
+  db.claimQuest(driver.id, req.body?.questId),
+  400
+));
+
+app.get('/api/driver/:id/kyc', driverRoute((driver) => db.getDriverKyc(driver.id)));
+
+app.post('/api/driver/:id/kyc', driverRoute((driver, req) => {
+  const { docType, data } = req.body || {};
+  // Only document metadata may be updated by the driver; verification status is server-controlled.
+  const allowed = ['fileUrl', 'docNumber', 'expiryDate', 'fileName'];
+  const safeData = Object.fromEntries(
+    Object.entries(data || {}).filter(([key, value]) => allowed.includes(key) && typeof value === 'string')
+  );
+  return db.updateDriverKyc(driver.id, docType, safeData);
+}, 400));
+
+app.get('/api/driver/:id/destination', driverRoute((driver) => db.getDriverDestination(driver.id)));
+
+app.post('/api/driver/:id/destination', driverRoute((driver, req) =>
+  db.setDriverDestination(driver.id, {
+    enabled: Boolean(req.body?.enabled),
+    destination: req.body?.destination || null
+  }),
+  400
+));
+
+// ---------------- IVR KEYPAD DISPATCH (demo simulator) ----------------
+
+app.post('/api/ivr/dispatch', (req, res) => {
+  try {
+    const { driverPhone, driverId, ride } = req.body || {};
+    res.json({ success: true, call: ivrService.initiateKeypadDispatch({ driverPhone, driverId, ride }) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/ivr/keypad', (req, res) => {
+  const { callId, digit, driverId } = req.body || {};
+  if (!callId || !digit) {
+    return res.status(400).json({ error: 'callId and digit are required' });
+  }
+  res.json(ivrService.handleKeypadInput({ callId, digit: String(digit), driverId }));
+});
+
+app.get('/api/ivr/calls', (req, res) => {
+  if (!req.query.driverId) return res.status(400).json({ error: 'driverId is required' });
+  res.json({ calls: ivrService.getActiveCalls(String(req.query.driverId)) });
+});
+
 async function startServer() {
   await db.initialize();
+  ivrService.setSocketIO(io);
   setupSocketIO(io);
   server.listen(PORT, () => {
     console.log(`NexRide Server running on port ${PORT}`);

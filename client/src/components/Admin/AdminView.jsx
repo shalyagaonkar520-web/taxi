@@ -50,6 +50,22 @@ export default function AdminView({
   const [currencyCode, setCurrencyCode] = useState('USD');
   const [saveStatus, setSaveStatus] = useState('');
   const [activeTab, setActiveTab] = useState('OPERATIONS'); // 'OPERATIONS' | 'METRICS'
+  const [sosAlert, setSosAlert] = useState(null);
+
+  // Emergency SOS broadcasts from riders/drivers
+  useEffect(() => {
+    let clearTimer = null;
+    const handleSosAlert = (data) => {
+      setSosAlert(data);
+      clearTimeout(clearTimer);
+      clearTimer = setTimeout(() => setSosAlert(null), 10000);
+    };
+    socket.on('admin:sos_alert', handleSosAlert);
+    return () => {
+      clearTimeout(clearTimer);
+      socket.off('admin:sos_alert', handleSosAlert);
+    };
+  }, []);
 
   // Load metrics and users
   const loadMetrics = async () => {
@@ -260,6 +276,22 @@ export default function AdminView({
 
   return (
     <div className="w-full flex flex-col gap-4 animate-in fade-in duration-300">
+      {sosAlert && (
+        <div role="alert" className="p-4 rounded-3xl bg-red-500/20 border-2 border-red-500/80 text-white flex items-center justify-between shadow-2xl">
+          <div className="flex items-center gap-3">
+            <span className="text-2xl">🚨</span>
+            <div>
+              <h4 className="text-sm font-black text-red-300">EMERGENCY SOS</h4>
+              <p className="text-xs text-white">
+                {sosAlert.userName || 'A user'}{sosAlert.rideId ? ` • Ride ${sosAlert.rideId}` : ''} • {sosAlert.note || 'Emergency assistance requested'}
+              </p>
+            </div>
+          </div>
+          <button onClick={() => setSosAlert(null)} className="px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-xs font-bold text-white">
+            Acknowledge
+          </button>
+        </div>
+      )}
       {/* Top Operations / Analytics Mode Switcher */}
       <div className="p-1 rounded-2xl bg-black/60 backdrop-blur-xl border border-white/10 flex items-center gap-1 shadow-lg">
         <button

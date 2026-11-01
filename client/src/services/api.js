@@ -125,3 +125,6 @@ export async function updateAdminSettings(settings) {
     body: JSON.stringify(settings)
   });
 }
+
+// Build a full URL for an API path (e.g. apiUrl('/driver/heatmap')) so direct fetch() calls honour VITE_API_URL.
+export const apiUrl = (path) => `${API_BASE}${path}`;

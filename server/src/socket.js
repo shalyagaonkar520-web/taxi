@@ -2,13 +2,17 @@ const db = require('./db');
 const { calculateHaversineDistance, calculateHeading, getDrivingRoute } = require('./services/routing');
 const { calculateFare, getCurrencyForLocation } = require('./services/pricing');
 const { sendRideAcceptedNotification } = require('./services/telegram');
+const ivrService = require('./services/ivrService');
 
 const OPEN_RIDE_STATUSES = ['REQUESTED', 'MATCHING', 'ACCEPTED', 'ARRIVED', 'IN_PROGRESS'];
-const REQUEST_EXPIRY_MS = 45000;
+const DISPATCH_WINDOW_MS = 15000;
 const MAX_TIP = 500;
 const MAX_CHAT_LENGTH = 500;
 const MAX_SIMULATION_STEPS = 40;
 const PROMO_CODES = { SAVE20: 20 };
+
+// rideId -> { candidates: driverId[], index, currentDriverId, timer }: drivers are offered a ride one at a time.
+const dispatchSessions = new Map();
 
 // driverId -> interval handle, so a driver only ever has one movement simulation running.
 const driverSimulations = new Map();
@@ -38,6 +42,12 @@ function setupSocketIO(io) {
     .filter(driver => driver.status === 'BUSY')
     .forEach(driver => db.updateDriver(driver.id, { status: 'ONLINE' }));
 
+  // Keypad (IVR) answers go through the same accept/decline rules as the app.
+  ivrService.setHandlers({
+    accept: (rideId, driverId) => acceptRide(io, rideId, driverId),
+    decline: (rideId, driverId) => advanceDispatch(io, rideId, driverId)
+  });
+
   io.on('connection', (socket) => {
     // Async handlers must never reject: an unhandled rejection would take the whole server down.
     const safe = (name, handler) => async (...args) => {
@@ -66,12 +76,13 @@ function setupSocketIO(io) {
         settings: db.getSettings()
       });
 
-      // Re-deliver pending requests when a driver connects after dispatch.
+      // Re-deliver the open offer if this driver reconnects while it is still theirs to answer.
       if (normalizedRole === 'DRIVER') {
-        const pendingRide = db.getRides().find(ride => ride.status === 'REQUESTED' && !ride.driverId);
+        const offer = [...dispatchSessions.values()].find(session => session.currentDriverId === userId);
+        const pendingRide = offer && db.getRideById(offer.rideId);
         const driver = db.getDriverById(userId);
-        if (pendingRide && driver?.status === 'ONLINE' && isValidPoint(driver.location)) {
-          emitIncomingRequest(socket, pendingRide, driver);
+        if (pendingRide?.status === 'REQUESTED' && driver?.status === 'ONLINE' && isValidPoint(driver.location)) {
+          await emitIncomingRequest(socket, pendingRide, driver);
         }
       }
     }));
@@ -97,18 +108,27 @@ function setupSocketIO(io) {
       });
     });
 
-    // Driver status change (ONLINE, OFFLINE)
-    socket.on('driver:set_status', ({ driverId, status } = {}) => {
+    // Driver status change (ONLINE, OFFLINE), optionally carrying destination-mode preferences
+    const setDriverStatus = ({ driverId, status, destinationMode } = {}) => {
       if (!['ONLINE', 'OFFLINE'].includes(status)) return;
       const driver = db.getDriverById(driverId);
       // A driver on a trip cannot go offline/online manually; the trip flow owns BUSY.
       if (!driver || driver.status === 'BUSY') return;
 
+      if (destinationMode && typeof destinationMode === 'object') {
+        db.setDriverDestination(driverId, {
+          enabled: Boolean(destinationMode.enabled),
+          destination: destinationMode.destination || null
+        });
+      }
+
       const updated = db.updateDriver(driverId, { status });
       if (updated) {
-        io.emit('driver:status_changed', { driverId, status });
+        io.emit('driver:status_changed', { driverId, status, destinationMode });
       }
-    });
+    };
+    socket.on('driver:set_status', setDriverStatus);
+    socket.on('driver:status', setDriverStatus);
 
     // Rider requests a ride
     socket.on('ride:request', safe('ride:request', async (requestData) => {
@@ -163,36 +183,11 @@ function setupSocketIO(io) {
         status: 'REQUESTED'
       });
 
-      // Find the nearest online driver
-      const drivers = db.getDrivers().filter(d => d.status === 'ONLINE' && isValidPoint(d.location));
-      let targetDriver = null;
-
-      if (drivers.length > 0) {
-        targetDriver = drivers
-          .map(d => ({
-            driver: d,
-            dist: calculateHaversineDistance(pickup.lat, pickup.lng, d.location.lat, d.location.lng)
-          }))
-          .sort((a, b) => a.dist - b.dist)[0].driver;
-      }
-
       // Notify the rider that ride is created & dispatching
       socket.emit('ride:created', newRide);
       io.to('role:admin').emit('admin:ride_event', { type: 'RIDE_REQUESTED', ride: newRide });
 
-      if (targetDriver) {
-        await emitIncomingRequest(io.to(`user:${targetDriver.id}`), newRide, targetDriver, rider);
-
-        // Nobody picked the request up: release the rider instead of leaving them waiting forever.
-        setTimeout(() => expireUnacceptedRide(io, newRide.id), REQUEST_EXPIRY_MS);
-      } else {
-        // Fallback: If no manual driver online, auto-simulate driver acceptance in 3 seconds
-        setTimeout(() => {
-          simulateAutoDriverAcceptance(io, newRide.id).catch(err =>
-            console.error('Auto driver acceptance failed:', err)
-          );
-        }, 3000);
-      }
+      startDispatch(io, newRide, rider);
     }));
 
     // Rider cancels, either while still waiting or after a driver accepted
@@ -202,6 +197,8 @@ function setupSocketIO(io) {
       const cancellable = ['REQUESTED', 'MATCHING', 'ACCEPTED', 'ARRIVED'];
       if (!ride || ride.riderId !== riderId || !cancellable.includes(ride.status)) return;
 
+      endDispatch(io, rideId, { closeOffer: true });
+
       const updatedRide = db.updateRide(rideId, {
         status: 'CANCELLED',
         cancelledAt: new Date().toISOString(),
@@ -210,8 +207,13 @@ function setupSocketIO(io) {
 
       // A driver was already on the way - release them back to the road.
       if (ride.driverId) {
+        stopDriverSimulation(ride.driverId);
         db.updateDriver(ride.driverId, { status: 'ONLINE' });
         io.to(`user:${ride.driverId}`).emit('ride:cancelled', { ride: updatedRide });
+        io.to(`user:${ride.driverId}`).emit('ride:cancelled_by_rider', {
+          rideId,
+          message: 'The rider has cancelled this trip.'
+        });
         io.emit('driver:status_changed', { driverId: ride.driverId, status: 'ONLINE' });
       }
 
@@ -221,75 +223,16 @@ function setupSocketIO(io) {
 
     // Driver accepts ride request
     socket.on('ride:accept', safe('ride:accept', async ({ rideId, driverId } = {}) => {
-      const ride = db.getRideById(rideId);
-      const driver = db.getDriverById(driverId);
-      if (!ride || !driver) return;
-
-      if (ride.status !== 'REQUESTED' || ride.driverId || driver.status === 'BUSY') {
-        socket.emit('ride:error', { message: 'This ride request is no longer available.' });
-        return;
+      const result = await acceptRide(io, rideId, driverId);
+      if (!result.ok) {
+        socket.emit('ride:error', { message: result.message });
       }
-
-      // Claim the ride before awaiting anything so two drivers cannot both accept it.
-      db.updateRide(rideId, { driverId });
-      db.updateDriver(driverId, { status: 'BUSY' });
-
-      let toPickupRoute;
-      try {
-        toPickupRoute = await getDrivingRoute(driver.location, ride.pickup);
-      } catch (err) {
-        db.updateRide(rideId, { driverId: null });
-        db.updateDriver(driverId, { status: 'ONLINE' });
-        throw err;
-      }
-
-      // The rider may have cancelled while the route was being calculated.
-      if (db.getRideById(rideId)?.status !== 'REQUESTED') {
-        db.updateDriver(driverId, { status: 'ONLINE' });
-        socket.emit('ride:error', { message: 'This ride request is no longer available.' });
-        return;
-      }
-
-      const updatedRide = db.updateRide(rideId, {
-        driverId,
-        status: 'ACCEPTED',
-        acceptedAt: new Date().toISOString(),
-        driverRouteCoordinates: toPickupRoute.coordinates,
-        etaToPickupMin: toPickupRoute.durationMin
-      });
-
-      const rider = db.getUserById(ride.riderId);
-
-      sendRideAcceptedNotification(updatedRide, driver, rider);
-
-      // Broadcast to Rider & Driver & Admin
-      io.to(`user:${ride.riderId}`).emit('ride:accepted', {
-        ride: updatedRide,
-        driver: {
-          id: driver.id,
-          name: driver.name,
-          phone: driver.phone,
-          rating: driver.rating,
-          totalTrips: driver.totalTrips,
-          avatar: driver.avatar,
-          location: driver.location,
-          vehicle: driver.vehicle
-        },
-        etaToPickupMin: toPickupRoute.durationMin
-      });
-
-      socket.emit('ride:accepted_confirmation', {
-        ride: updatedRide,
-        rider: db.sanitizeUser(rider),
-        routeToPickup: toPickupRoute
-      });
-
-      io.emit('driver:status_changed', { driverId, status: 'BUSY' });
-      io.to('role:admin').emit('admin:ride_event', { type: 'RIDE_ACCEPTED', ride: updatedRide, driver: db.sanitizeUser(driver) });
-
-      // Start automatic simulated smooth GPS progression to pickup
-      startDriverMovementSimulation(io, driverId, toPickupRoute.coordinates, 'TO_PICKUP', rideId);
     }));
+
+    // Driver declines the offer (or the keypad/timeout path does it): the next nearest driver is tried.
+    socket.on('ride:decline', ({ rideId, driverId } = {}) => {
+      advanceDispatch(io, rideId, driverId);
+    });
 
     // Driver arrives at pickup location
     socket.on('ride:arrived', ({ rideId, driverId } = {}) => {
@@ -409,8 +352,72 @@ function setupSocketIO(io) {
       }
     });
 
+    // Arrival wait timer: relay the running wait time and fee to the rider.
+    socket.on('trip:wait_timer', ({ rideId, waitingSeconds, waitingFee } = {}) => {
+      const ride = db.getRideById(rideId);
+      if (!ride || ride.status !== 'ARRIVED') return;
+      io.to(`user:${ride.riderId}`).emit('trip:wait_timer_update', {
+        rideId,
+        waitingSeconds: Math.max(0, Math.floor(Number(waitingSeconds) || 0)),
+        waitingFee: Math.max(0, Number(waitingFee) || 0)
+      });
+    });
+
+    // Driver cancels before the trip starts, with a reason.
+    socket.on('ride:cancel_reason', ({ rideId, driverId, reason } = {}) => {
+      const ride = db.getRideById(rideId);
+      if (!ride || ride.driverId !== driverId || !['ACCEPTED', 'ARRIVED'].includes(ride.status)) return;
+
+      const cleanReason = typeof reason === 'string' && reason.trim() ? reason.trim().slice(0, 200) : 'Cancelled by driver';
+      stopDriverSimulation(driverId);
+
+      const updatedRide = db.updateRide(rideId, {
+        status: 'CANCELLED',
+        cancelledAt: new Date().toISOString(),
+        cancellationReason: cleanReason,
+        cancelledBy: 'DRIVER'
+      });
+      db.updateDriver(driverId, { status: 'ONLINE' });
+
+      io.emit('driver:status_changed', { driverId, status: 'ONLINE' });
+      io.to(`user:${driverId}`).emit('ride:cancelled', { ride: updatedRide });
+      io.to(`user:${ride.riderId}`).emit('ride:cancelled', { ride: updatedRide });
+      io.to(`user:${ride.riderId}`).emit('ride:error', {
+        message: `Your driver cancelled the trip: ${cleanReason}`
+      });
+      io.to('role:admin').emit('admin:ride_event', { type: 'RIDE_CANCELLED', ride: updatedRide, reason: cleanReason });
+    });
+
+    // SOS from either party on a ride: alert admins and the other party.
+    socket.on('ride:sos', ({ rideId, userId, location, note } = {}) => {
+      const ride = db.getRideById(rideId);
+      const user = db.getUserById(userId);
+      if (!user || (ride && ![ride.riderId, ride.driverId].includes(userId))) return;
+
+      const sosAlert = {
+        id: `sos-${Date.now()}`,
+        rideId: ride ? rideId : null,
+        userId,
+        userName: user.name,
+        userPhone: user.phone || 'Emergency Dispatch',
+        location: isValidPoint(location) ? { lat: Number(location.lat), lng: Number(location.lng) } : null,
+        note: typeof note === 'string' && note.trim() ? note.trim().slice(0, 300) : 'SOS Emergency Button Triggered!',
+        timestamp: new Date().toISOString()
+      };
+
+      io.to('role:admin').emit('admin:sos_alert', sosAlert);
+      if (ride) {
+        [ride.riderId, ride.driverId]
+          .filter(Boolean)
+          .forEach(id => io.to(`user:${id}`).emit('ride:sos_received', sosAlert));
+      }
+    });
+
     // In-trip Rider-Driver Chat
-    socket.on('chat:send', ({ rideId, senderId, senderName, senderRole, text } = {}) => {
+    socket.on('chat:send', (payload = {}) => {
+      const wrapped = payload.message && typeof payload.message === 'object';
+      const { senderId, senderName, senderRole, text } = wrapped ? payload.message : payload;
+      const { rideId } = payload;
       const ride = db.getRideById(rideId);
       if (!ride || ![ride.riderId, ride.driverId].includes(senderId)) return;
 
@@ -431,7 +438,8 @@ function setupSocketIO(io) {
       if (recipientId) {
         io.to(`user:${recipientId}`).emit('chat:message', message);
       }
-      socket.emit('chat:message', message);
+      // The driver app appends its own message locally, so only echo for the flat payload shape.
+      if (!wrapped) socket.emit('chat:message', message);
     });
   });
 
@@ -439,7 +447,7 @@ function setupSocketIO(io) {
   startIdleDriversCruising(io);
 }
 
-async function emitIncomingRequest(target, ride, driver, rider = db.getUserById(ride.riderId)) {
+async function emitIncomingRequest(target, ride, driver, rider = db.getUserById(ride.riderId), extra = {}) {
   const settings = db.getSettings();
   let toPickupRoute = { distanceKm: 0, durationMin: 0 };
   try {
@@ -457,8 +465,198 @@ async function emitIncomingRequest(target, ride, driver, rider = db.getUserById(
     },
     pickupDistanceKm: toPickupRoute.distanceKm,
     pickupDurationMin: toPickupRoute.durationMin,
-    estimatedEarnings: Number((ride.fare * (1 - (settings.platformCommissionPercent ?? 20) / 100)).toFixed(2))
+    estimatedEarnings: Number((ride.fare * (1 - (settings.platformCommissionPercent ?? 20) / 100)).toFixed(2)),
+    timeoutSeconds: DISPATCH_WINDOW_MS / 1000,
+    ...extra
   });
+}
+
+/**
+ * Offer a new ride to the nearest online drivers one at a time (15s each).
+ * With nobody online the demo fallback auto-assigns a simulated driver.
+ */
+function startDispatch(io, ride, rider) {
+  const candidates = db.getDrivers()
+    .filter(d => d.status === 'ONLINE' && isValidPoint(d.location))
+    .map(d => ({ id: d.id, dist: calculateHaversineDistance(ride.pickup.lat, ride.pickup.lng, d.location.lat, d.location.lng) }))
+    .sort((a, b) => a.dist - b.dist)
+    .map(c => c.id);
+
+  if (candidates.length === 0) {
+    setTimeout(() => {
+      simulateAutoDriverAcceptance(io, ride.id).catch(err =>
+        console.error('Auto driver acceptance failed:', err)
+      );
+    }, 3000);
+    return;
+  }
+
+  dispatchSessions.set(ride.id, { rideId: ride.id, candidates, index: 0, currentDriverId: null, timer: null });
+  offerToNextDriver(io, ride.id, rider).catch(err => console.error('Dispatch failed:', err));
+}
+
+async function offerToNextDriver(io, rideId, rider) {
+  const session = dispatchSessions.get(rideId);
+  if (!session) return;
+
+  const ride = db.getRideById(rideId);
+  if (!ride || ride.status !== 'REQUESTED' || ride.driverId) {
+    endDispatch(io, rideId);
+    return;
+  }
+
+  // Skip anyone who went offline or got busy since the list was built.
+  let driver = null;
+  while (session.index < session.candidates.length) {
+    const candidate = db.getDriverById(session.candidates[session.index]);
+    if (candidate?.status === 'ONLINE' && isValidPoint(candidate.location)) {
+      driver = candidate;
+      break;
+    }
+    session.index++;
+  }
+
+  if (!driver) {
+    // Everyone declined or timed out.
+    endDispatch(io, rideId);
+    expireUnacceptedRide(io, rideId);
+    return;
+  }
+
+  const riderUser = rider || db.getUserById(ride.riderId);
+  session.currentDriverId = driver.id;
+
+  // Arm the acceptance window first so a slow route lookup cannot extend it.
+  clearTimeout(session.timer);
+  session.timer = setTimeout(() => {
+    io.to(`user:${driver.id}`).emit('ride:request_timeout', { rideId });
+    advanceDispatch(io, rideId, driver.id);
+  }, DISPATCH_WINDOW_MS);
+
+  await emitIncomingRequest(io.to(`user:${driver.id}`), ride, driver, riderUser);
+
+  // Drivers who opted in to keypad-phone dispatch get an automated call for the same offer.
+  if (driver.ivrEnabled) try {
+    ivrService.initiateKeypadDispatch({
+      driverPhone: driver.phone,
+      driverId: driver.id,
+      ride: {
+        id: ride.id,
+        pickup: ride.pickup?.address,
+        destination: ride.destination?.address,
+        fare: ride.fare,
+        riderName: riderUser?.name
+      }
+    });
+  } catch (err) {
+    console.warn('IVR dispatch notice failed:', err.message);
+  }
+
+  io.to(`user:${ride.riderId}`).emit('ride:dispatch_status', {
+    status: 'SEARCHING',
+    attempt: session.index + 1,
+    totalAttempts: session.candidates.length
+  });
+}
+
+/** Current driver declined or ran out of time: try the next one. */
+function advanceDispatch(io, rideId, driverId) {
+  const session = dispatchSessions.get(rideId);
+  if (!session || session.currentDriverId !== driverId) return;
+
+  clearTimeout(session.timer);
+  session.timer = null;
+  io.to(`user:${driverId}`).emit('ride:request_closed', { rideId });
+
+  session.index++;
+  session.currentDriverId = null;
+  offerToNextDriver(io, rideId).catch(err => console.error('Dispatch failed:', err));
+}
+
+function endDispatch(io, rideId, { closeOffer = false } = {}) {
+  const session = dispatchSessions.get(rideId);
+  if (!session) return;
+  clearTimeout(session.timer);
+  if (closeOffer && session.currentDriverId) {
+    io.to(`user:${session.currentDriverId}`).emit('ride:request_cancelled', { rideId });
+  }
+  dispatchSessions.delete(rideId);
+}
+
+/**
+ * Assign a requested ride to a driver. Shared by the app and keypad (IVR) paths.
+ * Returns { ok: true } or { ok: false, message }.
+ */
+async function acceptRide(io, rideId, driverId) {
+  const unavailable = { ok: false, message: 'This ride request is no longer available.' };
+  const ride = db.getRideById(rideId);
+  const driver = db.getDriverById(driverId);
+  if (!ride || !driver) return unavailable;
+
+  const session = dispatchSessions.get(rideId);
+  const notOffered = session && session.currentDriverId !== driverId;
+  if (ride.status !== 'REQUESTED' || ride.driverId || driver.status === 'BUSY' || notOffered) return unavailable;
+
+  // Claim the ride before awaiting anything so two drivers cannot both accept it.
+  db.updateRide(rideId, { driverId });
+  db.updateDriver(driverId, { status: 'BUSY' });
+  endDispatch(io, rideId);
+
+  let toPickupRoute;
+  try {
+    toPickupRoute = await getDrivingRoute(driver.location, ride.pickup);
+  } catch (err) {
+    db.updateRide(rideId, { driverId: null });
+    db.updateDriver(driverId, { status: 'ONLINE' });
+    throw err;
+  }
+
+  // The rider may have cancelled while the route was being calculated.
+  if (db.getRideById(rideId)?.status !== 'REQUESTED') {
+    db.updateDriver(driverId, { status: 'ONLINE' });
+    return unavailable;
+  }
+
+  const updatedRide = db.updateRide(rideId, {
+    driverId,
+    status: 'ACCEPTED',
+    acceptedAt: new Date().toISOString(),
+    driverRouteCoordinates: toPickupRoute.coordinates,
+    etaToPickupMin: toPickupRoute.durationMin
+  });
+
+  const rider = db.getUserById(ride.riderId);
+
+  sendRideAcceptedNotification(updatedRide, driver, rider);
+
+  // Broadcast to Rider & Driver & Admin
+  io.to(`user:${ride.riderId}`).emit('ride:accepted', {
+    ride: updatedRide,
+    driver: {
+      id: driver.id,
+      name: driver.name,
+      phone: driver.phone,
+      rating: driver.rating,
+      totalTrips: driver.totalTrips,
+      avatar: driver.avatar,
+      location: driver.location,
+      vehicle: driver.vehicle
+    },
+    etaToPickupMin: toPickupRoute.durationMin
+  });
+
+  io.to(`user:${driverId}`).emit('ride:accepted_confirmation', {
+    ride: updatedRide,
+    rider: db.sanitizeUser(rider),
+    routeToPickup: toPickupRoute
+  });
+
+  io.emit('driver:status_changed', { driverId, status: 'BUSY' });
+  io.to('role:admin').emit('admin:ride_event', { type: 'RIDE_ACCEPTED', ride: updatedRide, driver: db.sanitizeUser(driver) });
+
+  // Start automatic simulated smooth GPS progression to pickup
+  startDriverMovementSimulation(io, driverId, toPickupRoute.coordinates, 'TO_PICKUP', rideId);
+  return { ok: true };
 }
 
 function stopDriverSimulation(driverId) {

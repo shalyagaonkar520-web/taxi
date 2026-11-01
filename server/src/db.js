@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const { Pool } = require('pg');
+const { DriverMethods } = require('./services/driverService');
 
 const DATA_DIR = path.join(__dirname, '..', 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
@@ -434,6 +435,14 @@ class Database {
     }
   }
 
+  // Extra per-driver records (payouts, KYC, quests, destination mode)
+  getExtras() {
+    if (!this.data.driverExtras) {
+      this.data.driverExtras = { payouts: [], kyc: {}, quests: {}, destination: {} };
+    }
+    return this.data.driverExtras;
+  }
+
   // Users & Drivers
   getUsers() {
     return this.data.users.map(user => this.sanitizeUser(user));
@@ -578,5 +587,12 @@ class Database {
     return settings;
   }
 }
+
+// Driver dashboard features share this class's state and persistence.
+Object.getOwnPropertyNames(DriverMethods.prototype)
+  .filter((name) => name !== 'constructor')
+  .forEach((name) => {
+    Database.prototype[name] = DriverMethods.prototype[name];
+  });
 
 module.exports = new Database();

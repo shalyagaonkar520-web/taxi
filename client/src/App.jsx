@@ -9,7 +9,7 @@ import HistoryModal from './components/HistoryModal';
 import ProfileModal from './components/ProfileModal';
 import LoginView from './components/LoginView';
 import { socket, registerUser } from './services/socket';
-import { fetchDrivers, fetchActiveRide } from './services/api';
+import { fetchDrivers, fetchActiveRide, apiUrl } from './services/api';
 
 function getRoleFromPath() {
   const path = window.location.pathname.toLowerCase().replace(/\/+$/, '');
@@ -70,6 +70,18 @@ function RoleApp({ role }) {
   const [selectedDriver, setSelectedDriver] = useState(null);
   const [selectedRider, setSelectedRider] = useState(null);
   const [adminRiders, setAdminRiders] = useState([]);
+
+  // Driver demand heatmap
+  const [showDriverHeatmap, setShowDriverHeatmap] = useState(false);
+  const [driverHeatmapZones, setDriverHeatmapZones] = useState([]);
+
+  useEffect(() => {
+    if (role !== 'DRIVER' || !authenticatedUser) return;
+    fetch(apiUrl('/driver/heatmap'))
+      .then((res) => (res.ok ? res.json() : []))
+      .then((zones) => setDriverHeatmapZones(Array.isArray(zones) ? zones : []))
+      .catch(() => setDriverHeatmapZones([]));
+  }, [role, authenticatedUser]);
 
   const handleAdminLayerToggle = (layerKey) => {
     setAdminLayers((prev) => ({ ...prev, [layerKey]: !prev[layerKey] }));
@@ -220,16 +232,21 @@ function RoleApp({ role }) {
           )}
 
           {role === 'DRIVER' && (
-            <DriverView
-              driver={currentUser}
-              activeRide={activeRide}
-              onRideUpdate={setActiveRide}
-              onStatusChange={(status) => {
-                if (currentUser) {
-                  setCurrentUser({ ...currentUser, status });
-                }
-              }}
-            />
+            <div className="w-full md:w-[420px] h-[calc(100dvh-6rem)] max-h-[860px] rounded-3xl overflow-hidden border border-white/10 shadow-2xl">
+              <DriverView
+                driver={currentUser}
+                activeRide={activeRide}
+                onRideUpdate={setActiveRide}
+                onStatusChange={(status) => {
+                  if (currentUser) {
+                    setCurrentUser({ ...currentUser, status });
+                  }
+                }}
+                showHeatmap={showDriverHeatmap}
+                onToggleHeatmap={() => setShowDriverHeatmap((prev) => !prev)}
+                heatmapZones={driverHeatmapZones}
+              />
+            </div>
           )}
 
           {role === 'ADMIN' && (
@@ -266,6 +283,8 @@ function RoleApp({ role }) {
             routeCoordinates={mapRoute}
             driverRouteCoordinates={driverRoute}
             assignedDriverId={activeRide?.driverId}
+            heatmapZones={driverHeatmapZones}
+            showHeatmap={role === 'DRIVER' && showDriverHeatmap}
             entityFilter={role === 'ADMIN' ? adminEntityFilter : 'BOTH'}
             activeLayers={role === 'ADMIN' ? adminLayers : undefined}
             onDriverClick={role === 'ADMIN' ? setSelectedDriver : undefined}
